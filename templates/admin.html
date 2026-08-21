@@ -1,7 +1,1 @@
-
-{% extends "base.html" %}{% block title %}پنل مدیریت{% endblock %}{% block content %}
-<section class="container section"><div class="admin-top"><div><span class="eyebrow">مدیریت</span><h1>پنل مدیریت</h1></div><a class="btn" href="{{url_for('new_product')}}">+ افزودن محصول</a></div>
-<div class="stats"><div><b>{{product_count}}</b><span>محصول</span></div><div><b>{{category_count}}</b><span>دسته‌بندی</span></div></div>
-<div class="admin-links"><a href="{{url_for('categories')}}">مدیریت دسته‌بندی‌ها</a><a href="{{url_for('admin_settings')}}">تنظیمات فروشگاه</a><a href="{{url_for('home')}}">مشاهده سایت</a></div>
-<div class="table-wrap"><table><tr><th>تصویر</th><th>محصول</th><th>دسته‌بندی</th><th>قیمت</th><th>عملیات</th></tr>{% for p in products %}<tr><td>{% if p.image %}<img class="thumb" src="{{url_for('static',filename='uploads/'+p.image)}}">{% endif %}</td><td>{{p.name}}</td><td>{{p.category_name or '-'}}</td><td>{{p.price or '-'}}</td><td><a class="small-btn" href="{{url_for('edit_product',pid=p.id)}}">ویرایش</a><form class="inline" method="post" action="{{url_for('delete_product',pid=p.id)}}" onsubmit="return confirm('حذف شود؟')"><button class="danger" type="submit">حذف</button></form></td></tr>{% else %}<tr><td colspan="5">محصولی وجود ندارد.</td></tr>{% endfor %}</table></div></section>
-{% endblock %}
+{% extends 'base.html' %}{% block content %}<div class="wrap section"><h1>پنل مدیریت</h1><div class="stats"><div><b>{{counts.products}}</b>محصول</div><div><b>{{counts.categories}}</b>دسته‌بندی</div><div><b>{{counts.featured}}</b>منتخب</div></div><div class="adminlinks"><a href="/admin/products">مدیریت محصولات</a><a href="/admin/settings">تنظیمات سایت</a><a href="/admin/logout">خروج</a></div></div>{% endblock %}

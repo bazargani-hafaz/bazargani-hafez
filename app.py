@@ -1,261 +1,72 @@
-
-import os, sqlite3, secrets, hashlib
+import os, sqlite3, uuid
 from pathlib import Path
 from functools import wraps
-from flask import Flask, render_template, request, redirect, url_for, session, flash, send_from_directory, abort
-
-BASE = Path(__file__).resolve().parent
-DB = BASE / "store.db"
-UPLOADS = BASE / "static" / "uploads"
-UPLOADS.mkdir(parents=True, exist_ok=True)
-
-app = Flask(__name__, template_folder=str(BASE / 'templates'), static_folder=str(BASE / 'static'), static_url_path='/static')
-app.secret_key = os.getenv("SECRET_KEY", secrets.token_hex(32))
-ADMIN_USER = os.getenv("ADMIN_USERNAME", "admin")
-ADMIN_PASS = os.getenv("ADMIN_PASSWORD", "admin123")
-MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "8"))
-app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
-ALLOWED = {"jpg","jpeg","png","webp","gif"}
-
+from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, abort
+from werkzeug.utils import secure_filename
+BASE=Path(__file__).resolve().parent; DB=BASE/'instance/store.db'; UP=BASE/'static/uploads'; UP.mkdir(parents=True,exist_ok=True); DB.parent.mkdir(parents=True,exist_ok=True)
+app=Flask(__name__); app.secret_key=os.getenv('SECRET_KEY','change-me'); app.config['MAX_CONTENT_LENGTH']=8*1024*1024
 def db():
-    con = sqlite3.connect(DB)
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA foreign_keys=ON")
-    return con
-
+ c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; return c
 def init_db():
-    con = db()
-    con.executescript("""
-    CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL DEFAULT ''
-    );
-    CREATE TABLE IF NOT EXISTS categories (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL UNIQUE,
-        slug TEXT NOT NULL UNIQUE,
-        sort_order INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE TABLE IF NOT EXISTS products (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        slug TEXT NOT NULL UNIQUE,
-        category_id INTEGER,
-        brand TEXT DEFAULT '',
-        price TEXT DEFAULT '',
-        discount TEXT DEFAULT '',
-        color TEXT DEFAULT '',
-        material TEXT DEFAULT '',
-        dimensions TEXT DEFAULT '',
-        description TEXT DEFAULT '',
-        stock TEXT DEFAULT '',
-        code TEXT DEFAULT '',
-        image TEXT DEFAULT '',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(category_id) REFERENCES categories(id) ON DELETE SET NULL
-    );
-    """)
-    defaults = {
-        "store_name": "خانه شیرآلات",
-        "store_tagline": "نمایش محصولات شیرآلات و لوازم آشپزخانه",
-        "phone": "",
-        "address": "",
-        "telegram": "",
-        "whatsapp": "",
-        "logo": ""
-    }
-    for k,v in defaults.items():
-        con.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)",(k,v))
-    if con.execute("SELECT COUNT(*) FROM categories").fetchone()[0] == 0:
-        for i,n in enumerate(["شیرآلات","سینک","اجاق گاز","هود","فر","لوازم آشپزخانه","سایر"]):
-            slug = slugify(n)
-            con.execute("INSERT INTO categories(name,slug,sort_order) VALUES(?,?,?)",(n,slug,i))
-    con.commit(); con.close()
-
-def slugify(s):
-    s = (s or "").strip().lower()
-    repl = {" ":"-","/":"-","_":"-"}
-    for a,b in repl.items(): s=s.replace(a,b)
-    return "".join(c for c in s if c.isalnum() or c in "-_").strip("-") or secrets.token_hex(4)
-
-def unique_slug(name, current_id=None):
-    base = slugify(name)
-    slug = base
-    i = 2
-    con = db()
-    while True:
-        row = con.execute("SELECT id FROM products WHERE slug=?", (slug,)).fetchone()
-        if not row or (current_id and row["id"] == current_id):
-            con.close(); return slug
-        slug=f"{base}-{i}"; i+=1
-
+ c=db(); c.executescript("""CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS categories(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,slug TEXT UNIQUE NOT NULL); CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,slug TEXT UNIQUE NOT NULL,category_id INTEGER,brand TEXT DEFAULT '',description TEXT DEFAULT '',specs TEXT DEFAULT '',featured INTEGER DEFAULT 0,active INTEGER DEFAULT 1,image TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);""")
+ for k,v in {'site_name':'شیرآلات مدرن','tagline':'ویترین آنلاین محصولات آشپزخانه و سرویس بهداشتی','phone':'09120000000','address':'تهران','hero_title':'خانه‌ای زیباتر با انتخابی حرفه‌ای','hero_text':'شیرآلات، سینک، گاز، هود و تجهیزات آشپزخانه را در یک ویترین مدرن ببینید.'}.items(): c.execute('INSERT OR IGNORE INTO settings VALUES(?,?)',(k,v))
+ if c.execute('SELECT COUNT(*) n FROM categories').fetchone()['n']==0:
+  for n,s in [('شیرآلات','faucets'),('سینک','sinks'),('گاز','cookers'),('هود','hoods'),('تجهیزات آشپزخانه','kitchen')]: c.execute('INSERT INTO categories(name,slug) VALUES(?,?)',(n,s))
+ c.commit(); c.close()
 def settings():
-    con=db()
-    data={r["key"]:r["value"] for r in con.execute("SELECT key,value FROM settings")}
-    con.close(); return data
-
-def admin_required(f):
-    @wraps(f)
-    def wrapper(*a, **kw):
-        if not session.get("admin"):
-            return redirect(url_for("login", next=request.path))
-        return f(*a, **kw)
-    return wrapper
-
-def valid_file(f):
-    return f and f.filename and "." in f.filename and f.filename.rsplit(".",1)[1].lower() in ALLOWED
-
-@app.context_processor
-def inject():
-    con=db()
-    cats=con.execute("SELECT * FROM categories ORDER BY sort_order,name").fetchall()
-    con.close()
-    return {"site":settings(),"nav_categories":cats}
-
-@app.get("/health")
-def health():
-    return {"status": "ok", "version": "1.1.0"}
-
-@app.route("/")
-def home():
-    con=db()
-    products=con.execute("SELECT p.*,c.name category_name FROM products p LEFT JOIN categories c ON c.id=p.category_id ORDER BY p.id DESC").fetchall()
-    con.close()
-    return render_template("index.html", products=products)
-
-@app.route("/category/<slug>")
-def category(slug):
-    con=db()
-    cat=con.execute("SELECT * FROM categories WHERE slug=?", (slug,)).fetchone()
-    if not cat: abort(404)
-    products=con.execute("SELECT p.*,c.name category_name FROM products p LEFT JOIN categories c ON c.id=p.category_id WHERE p.category_id=? ORDER BY p.id DESC",(cat["id"],)).fetchall()
-    con.close()
-    return render_template("category.html", category=cat, products=products)
-
-@app.route("/product/<slug>")
-def product(slug):
-    con=db()
-    p=con.execute("SELECT p.*,c.name category_name FROM products p LEFT JOIN categories c ON c.id=p.category_id WHERE p.slug=?",(slug,)).fetchone()
-    con.close()
-    if not p: abort(404)
-    return render_template("product.html", p=p)
-
-@app.route("/admin/login", methods=["GET","POST"])
-def login():
-    if request.method=="POST":
-        u=request.form.get("username",""); pw=request.form.get("password","")
-        if secrets.compare_digest(u,ADMIN_USER) and secrets.compare_digest(pw,ADMIN_PASS):
-            session["admin"]=True
-            return redirect(request.args.get("next") or url_for("dashboard"))
-        flash("نام کاربری یا رمز عبور اشتباه است.","error")
-    return render_template("login.html")
-
-@app.route("/admin/logout")
-def logout():
-    session.clear(); return redirect(url_for("home"))
-
-@app.route("/admin")
-@admin_required
-def dashboard():
-    con=db()
-    pc=con.execute("SELECT COUNT(*) c FROM products").fetchone()["c"]
-    cc=con.execute("SELECT COUNT(*) c FROM categories").fetchone()["c"]
-    products=con.execute("SELECT p.*,c.name category_name FROM products p LEFT JOIN categories c ON c.id=p.category_id ORDER BY p.id DESC").fetchall()
-    con.close()
-    return render_template("admin.html", products=products, product_count=pc, category_count=cc)
-
-@app.route("/admin/product/new", methods=["GET","POST"])
-@admin_required
-def new_product():
-    con=db(); cats=con.execute("SELECT * FROM categories ORDER BY sort_order,name").fetchall()
-    if request.method=="POST":
-        f=request.files.get("image"); image=""
-        if valid_file(f):
-            ext=f.filename.rsplit(".",1)[1].lower()
-            image=secrets.token_hex(12)+"."+ext; f.save(UPLOADS/image)
-        name=request.form.get("name","").strip()
-        if not name:
-            flash("نام محصول الزامی است.","error"); con.close(); return render_template("product_form.html",p=None,cats=cats)
-        con.execute("""INSERT INTO products(name,slug,category_id,brand,price,discount,color,material,dimensions,description,stock,code,image)
-                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (name,unique_slug(name),request.form.get("category_id") or None,request.form.get("brand",""),request.form.get("price",""),
-                     request.form.get("discount",""),request.form.get("color",""),request.form.get("material",""),request.form.get("dimensions",""),
-                     request.form.get("description",""),request.form.get("stock",""),request.form.get("code",""),image))
-        con.commit(); con.close(); flash("محصول با موفقیت اضافه شد.","ok"); return redirect(url_for("dashboard"))
-    con.close(); return render_template("product_form.html",p=None,cats=cats)
-
-@app.route("/admin/product/<int:pid>/edit", methods=["GET","POST"])
-@admin_required
-def edit_product(pid):
-    con=db(); p=con.execute("SELECT * FROM products WHERE id=?",(pid,)).fetchone()
-    cats=con.execute("SELECT * FROM categories ORDER BY sort_order,name").fetchall()
-    if not p: con.close(); abort(404)
-    if request.method=="POST":
-        image=p["image"]; f=request.files.get("image")
-        if valid_file(f):
-            if image:
-                old=UPLOADS/image
-                if old.exists(): old.unlink()
-            ext=f.filename.rsplit(".",1)[1].lower(); image=secrets.token_hex(12)+"."+ext; f.save(UPLOADS/image)
-        name=request.form.get("name","").strip()
-        con.execute("""UPDATE products SET name=?,slug=?,category_id=?,brand=?,price=?,discount=?,color=?,material=?,dimensions=?,description=?,stock=?,code=?,image=? WHERE id=?""",
-                    (name,unique_slug(name,pid),request.form.get("category_id") or None,request.form.get("brand",""),request.form.get("price",""),
-                     request.form.get("discount",""),request.form.get("color",""),request.form.get("material",""),request.form.get("dimensions",""),
-                     request.form.get("description",""),request.form.get("stock",""),request.form.get("code",""),image,pid))
-        con.commit(); con.close(); flash("محصول ویرایش شد.","ok"); return redirect(url_for("dashboard"))
-    con.close(); return render_template("product_form.html",p=p,cats=cats)
-
-@app.post("/admin/product/<int:pid>/delete")
-@admin_required
-def delete_product(pid):
-    con=db(); p=con.execute("SELECT image FROM products WHERE id=?",(pid,)).fetchone()
-    if p:
-        con.execute("DELETE FROM products WHERE id=?",(pid,)); con.commit()
-        if p["image"] and (UPLOADS/p["image"]).exists(): (UPLOADS/p["image"]).unlink()
-    con.close(); flash("محصول حذف شد.","ok"); return redirect(url_for("dashboard"))
-
-@app.route("/admin/categories", methods=["GET","POST"])
-@admin_required
-def categories():
-    con=db()
-    if request.method=="POST":
-        name=request.form.get("name","").strip()
-        if name:
-            try: con.execute("INSERT INTO categories(name,slug,sort_order) VALUES(?,?,?)",(name,slugify(name),request.form.get("sort_order") or 0)); con.commit()
-            except sqlite3.IntegrityError: flash("این دسته‌بندی قبلاً وجود دارد.","error")
-            else: flash("دسته‌بندی اضافه شد.","ok")
-    cats=con.execute("SELECT c.*,COUNT(p.id) count FROM categories c LEFT JOIN products p ON p.category_id=c.id GROUP BY c.id ORDER BY c.sort_order,c.name").fetchall()
-    con.close(); return render_template("categories.html",cats=cats)
-
-@app.post("/admin/categories/<int:cid>/delete")
-@admin_required
-def delete_category(cid):
-    con=db(); con.execute("DELETE FROM categories WHERE id=?",(cid,)); con.commit(); con.close()
-    flash("دسته‌بندی حذف شد.","ok"); return redirect(url_for("categories"))
-
-@app.route("/admin/settings", methods=["GET","POST"])
-@admin_required
-def admin_settings():
-    if request.method=="POST":
-        con=db()
-        for key in ["store_name","store_tagline","phone","address","telegram","whatsapp"]:
-            con.execute("INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)",(key,request.form.get(key,"").strip()))
-        con.commit(); con.close(); flash("تنظیمات ذخیره شد.","ok"); return redirect(url_for("admin_settings"))
-    return render_template("settings.html")
-
-@app.errorhandler(413)
-def too_large(e): return "حجم فایل بیش از حد مجاز است.",413
-
+ c=db(); x={r['key']:r['value'] for r in c.execute('SELECT * FROM settings')}; c.close(); return x
 init_db()
-
-_REQUIRED_TEMPLATES = [
-    "base.html", "index.html", "category.html", "product.html",
-    "login.html", "admin.html", "product_form.html",
-    "categories.html", "settings.html"
-]
-_missing = [x for x in _REQUIRED_TEMPLATES if not (BASE / "templates" / x).is_file()]
-if _missing:
-    raise RuntimeError("Missing template files: " + ", ".join(_missing) + f" | Expected directory: {BASE / 'templates'}")
-
-if __name__=="__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT","8080")), debug=False)
+@app.context_processor
+def ctx():
+ c=db(); cats=c.execute('SELECT * FROM categories ORDER BY name').fetchall(); c.close(); return {'settings':settings(),'nav_categories':cats}
+def admin(f):
+ @wraps(f)
+ def w(*a,**k):
+  return f(*a,**k) if session.get('admin') else redirect(url_for('login',next=request.path))
+ return w
+@app.route('/')
+def home():
+ c=db(); p=c.execute('SELECT p.*,c.name category FROM products p LEFT JOIN categories c ON c.id=p.category_id WHERE p.active=1 ORDER BY p.featured DESC,p.id DESC LIMIT 8').fetchall(); cats=c.execute('SELECT c.*,COUNT(p.id) count FROM categories c LEFT JOIN products p ON p.category_id=c.id GROUP BY c.id').fetchall(); c.close(); return render_template('index.html',products=p,categories=cats)
+@app.route('/products')
+def products():
+ q=request.args.get('q','').strip(); cat=request.args.get('cat',''); c=db(); sql='SELECT p.*,c.name category,c.slug catslug FROM products p LEFT JOIN categories c ON c.id=p.category_id WHERE p.active=1'; a=[]
+ if q: sql+=' AND (p.name LIKE ? OR p.brand LIKE ? OR p.description LIKE ?)'; a += [f'%{q}%']*3
+ if cat: sql+=' AND c.slug=?'; a.append(cat)
+ rows=c.execute(sql+' ORDER BY p.featured DESC,p.id DESC',a).fetchall(); c.close(); return render_template('products.html',products=rows,q=q,selected=cat)
+@app.route('/product/<slug>')
+def product(slug):
+ c=db(); p=c.execute('SELECT p.*,c.name category FROM products p LEFT JOIN categories c ON c.id=p.category_id WHERE p.slug=? AND p.active=1',(slug,)).fetchone(); c.close(); return render_template('product.html',product=p) if p else abort(404)
+@app.route('/admin/login',methods=['GET','POST'])
+def login():
+ if request.method=='POST' and request.form.get('username')==os.getenv('ADMIN_USERNAME','admin') and request.form.get('password')==os.getenv('ADMIN_PASSWORD','ChangeThisPassword_123!'): session['admin']=True; return redirect(request.args.get('next') or url_for('admin_home'))
+ if request.method=='POST': flash('نام کاربری یا رمز عبور اشتباه است.','error')
+ return render_template('login.html')
+@app.route('/admin/logout')
+def logout(): session.clear(); return redirect(url_for('home'))
+@app.route('/admin')
+@admin
+def admin_home():
+ c=db(); counts={k:c.execute(q).fetchone()['n'] for k,q in {'products':'SELECT COUNT(*) n FROM products','categories':'SELECT COUNT(*) n FROM categories','featured':'SELECT COUNT(*) n FROM products WHERE featured=1'}.items()}; c.close(); return render_template('admin.html',counts=counts)
+@app.route('/admin/settings',methods=['GET','POST'])
+@admin
+def admin_settings():
+ if request.method=='POST':
+  c=db();
+  for k in ['site_name','tagline','phone','address','hero_title','hero_text']: c.execute('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',(k,request.form.get(k,'')))
+  c.commit(); c.close(); flash('تنظیمات ذخیره شد.','ok')
+ return render_template('settings.html')
+@app.route('/admin/products',methods=['GET','POST'])
+@admin
+def admin_products():
+ c=db(); cats=c.execute('SELECT * FROM categories').fetchall()
+ if request.method=='POST':
+  name=request.form.get('name','').strip(); f=request.files.get('image'); img=''
+  if f and f.filename and f.filename.rsplit('.',1)[-1].lower() in {'png','jpg','jpeg','webp','gif'}:
+   ext=f.filename.rsplit('.',1)[-1].lower(); fn=secure_filename(f.filename.rsplit('.',1)[0])+'_'+uuid.uuid4().hex[:8]+'.'+ext; f.save(UP/fn); img=fn
+  if name: c.execute('INSERT INTO products(name,slug,category_id,brand,description,specs,featured,image) VALUES(?,?,?,?,?,?,?,?)',(name,uuid.uuid4().hex[:12],request.form.get('category_id') or None,request.form.get('brand',''),request.form.get('description',''),request.form.get('specs',''),1 if request.form.get('featured') else 0,img)); c.commit(); flash('محصول اضافه شد.','ok')
+ rows=c.execute('SELECT p.*,c.name category FROM products p LEFT JOIN categories c ON c.id=p.category_id ORDER BY p.id DESC').fetchall(); c.close(); return render_template('manage_products.html',products=rows,categories=cats)
+@app.post('/admin/products/delete/<int:pid>')
+@admin
+def delete_product(pid):
+ c=db(); c.execute('DELETE FROM products WHERE id=?',(pid,)); c.commit(); c.close(); return redirect(url_for('admin_products'))
+if __name__=='__main__': app.run(host='0.0.0.0',port=int(os.getenv('PORT',5000)))

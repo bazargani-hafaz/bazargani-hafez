@@ -1,8 +1,1 @@
-
-{% extends "base.html" %}{% block content %}
-<section class="hero"><div class="container"><span class="eyebrow">ویترین محصولات</span><h1>{{site.store_name}}</h1><p>{{site.store_tagline}}</p><a class="btn light" href="#products">مشاهده محصولات</a></div></section>
-<section class="container section" id="products">
-<div class="section-head"><div><span class="eyebrow">محصولات</span><h2>محصولات منتخب</h2></div></div>
-{% if products %}<div class="grid">{% for p in products %}<a class="card" href="{{url_for('product',slug=p.slug)}}">{% if p.image %}<img src="{{url_for('static',filename='uploads/'+p.image)}}" alt="{{p.name}}" loading="lazy">{% else %}<div class="placeholder">بدون تصویر</div>{% endif %}<div class="card-body"><small>{{p.category_name or 'بدون دسته‌بندی'}}</small><h3>{{p.name}}</h3>{% if p.brand %}<p class="muted">{{p.brand}}</p>{% endif %}{% if p.price %}<strong>{{p.price}} تومان</strong>{% endif %}</div></a>{% endfor %}</div>{% else %}<div class="empty">هنوز محصولی ثبت نشده است.</div>{% endif %}
-</section>
-{% endblock %}
+{% extends 'base.html' %}{% block content %}<section class="hero"><div class="wrap"><span>ویترین تخصصی</span><h1>{{settings.hero_title}}</h1><p>{{settings.hero_text}}</p><a class="btn" href="/products">مشاهده محصولات</a></div></section><section class="wrap section"><h2>دسته‌بندی‌ها</h2><div class="cats">{% for c in categories %}<a href="/products?cat={{c.slug}}"><b>{{c.name}}</b><small>{{c.count}} محصول</small></a>{% endfor %}</div></section><section class="section alt"><div class="wrap"><h2>محصولات منتخب</h2><div class="grid">{% for p in products %}<a class="card" href="/product/{{p.slug}}"><div class="pic">{% if p.image %}<img src="/static/uploads/{{p.image}}">{% else %}PRODUCT{% endif %}</div><h3>{{p.name}}</h3><small>{{p.category}}</small></a>{% endfor %}</div></div></section>{% endblock %}
