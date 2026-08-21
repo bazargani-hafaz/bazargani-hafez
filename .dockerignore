@@ -1,6 +1,7 @@
-store.db
-.env
-__pycache__/
+__pycache__
 *.pyc
+.git
+.env
+store.db
 static/uploads/*
 !static/uploads/.gitkeep

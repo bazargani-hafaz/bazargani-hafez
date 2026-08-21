@@ -9,7 +9,7 @@ DB = BASE / "store.db"
 UPLOADS = BASE / "static" / "uploads"
 UPLOADS.mkdir(parents=True, exist_ok=True)
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder=str(BASE / 'templates'), static_folder=str(BASE / 'static'), static_url_path='/static')
 app.secret_key = os.getenv("SECRET_KEY", secrets.token_hex(32))
 ADMIN_USER = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASSWORD", "admin123")
@@ -111,6 +111,10 @@ def inject():
     cats=con.execute("SELECT * FROM categories ORDER BY sort_order,name").fetchall()
     con.close()
     return {"site":settings(),"nav_categories":cats}
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "version": "1.1.0"}
 
 @app.route("/")
 def home():
@@ -243,6 +247,15 @@ def admin_settings():
 def too_large(e): return "حجم فایل بیش از حد مجاز است.",413
 
 init_db()
+
+_REQUIRED_TEMPLATES = [
+    "base.html", "index.html", "category.html", "product.html",
+    "login.html", "admin.html", "product_form.html",
+    "categories.html", "settings.html"
+]
+_missing = [x for x in _REQUIRED_TEMPLATES if not (BASE / "templates" / x).is_file()]
+if _missing:
+    raise RuntimeError("Missing template files: " + ", ".join(_missing) + f" | Expected directory: {BASE / 'templates'}")
 
 if __name__=="__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT","8080")), debug=False)
