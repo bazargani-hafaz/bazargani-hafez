@@ -1,0 +1,8 @@
+
+{% extends "base.html" %}{% block content %}
+<section class="hero"><div class="container"><span class="eyebrow">ویترین محصولات</span><h1>{{site.store_name}}</h1><p>{{site.store_tagline}}</p><a class="btn light" href="#products">مشاهده محصولات</a></div></section>
+<section class="container section" id="products">
+<div class="section-head"><div><span class="eyebrow">محصولات</span><h2>محصولات منتخب</h2></div></div>
+{% if products %}<div class="grid">{% for p in products %}<a class="card" href="{{url_for('product',slug=p.slug)}}">{% if p.image %}<img src="{{url_for('static',filename='uploads/'+p.image)}}" alt="{{p.name}}" loading="lazy">{% else %}<div class="placeholder">بدون تصویر</div>{% endif %}<div class="card-body"><small>{{p.category_name or 'بدون دسته‌بندی'}}</small><h3>{{p.name}}</h3>{% if p.brand %}<p class="muted">{{p.brand}}</p>{% endif %}{% if p.price %}<strong>{{p.price}} تومان</strong>{% endif %}</div></a>{% endfor %}</div>{% else %}<div class="empty">هنوز محصولی ثبت نشده است.</div>{% endif %}
+</section>
+{% endblock %}

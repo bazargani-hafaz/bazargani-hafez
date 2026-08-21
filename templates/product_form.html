@@ -1,0 +1,12 @@
+
+{% extends "base.html" %}{% block title %}{{'ویرایش' if p else 'افزودن'}} محصول{% endblock %}{% block content %}
+<section class="container section narrow"><h1>{{'ویرایش محصول' if p else 'افزودن محصول'}}</h1><form class="panel form-grid" method="post" enctype="multipart/form-data">
+<label>نام محصول *<input name="name" value="{{p.name if p else ''}}" required></label><label>دسته‌بندی<select name="category_id"><option value="">بدون دسته‌بندی</option>{% for c in cats %}<option value="{{c.id}}" {% if p and p.category_id==c.id %}selected{% endif %}>{{c.name}}</option>{% endfor %}</select></label>
+<label>برند<input name="brand" value="{{p.brand if p else ''}}"></label><label>قیمت<input name="price" value="{{p.price if p else ''}}" placeholder="مثلاً 12,500,000"></label>
+<label>تخفیف<input name="discount" value="{{p.discount if p else ''}}"></label><label>رنگ<input name="color" value="{{p.color if p else ''}}"></label>
+<label>جنس<input name="material" value="{{p.material if p else ''}}"></label><label>ابعاد<input name="dimensions" value="{{p.dimensions if p else ''}}"></label>
+<label>موجودی<input name="stock" value="{{p.stock if p else ''}}"></label><label>کد محصول<input name="code" value="{{p.code if p else ''}}"></label>
+<label class="full">توضیحات<textarea name="description" rows="6">{{p.description if p else ''}}</textarea></label><label class="full">تصویر محصول<input type="file" name="image" accept=".jpg,.jpeg,.png,.webp,.gif"></label>
+{% if p and p.image %}<div class="current"><img src="{{url_for('static',filename='uploads/'+p.image)}}"></div>{% endif %}
+<div class="full"><button class="btn" type="submit">ذخیره محصول</button> <a class="small-btn" href="{{url_for('dashboard')}}">انصراف</a></div></form></section>
+{% endblock %}
