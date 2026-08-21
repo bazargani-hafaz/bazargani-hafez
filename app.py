@@ -1,4 +1,4 @@
-import os, sqlite3, uuid, shutil, json
+import os, sqlite3, uuid, shutil, json, re
 from pathlib import Path
 from functools import wraps
 from datetime import datetime
@@ -7,11 +7,23 @@ from werkzeug.utils import secure_filename
 BASE=Path(__file__).resolve().parent; DB=BASE/'instance/store.db'; UP=BASE/'static/uploads'; UP.mkdir(parents=True,exist_ok=True); DB.parent.mkdir(parents=True,exist_ok=True)
 app=Flask(__name__); app.secret_key=os.getenv('SECRET_KEY','change-me'); app.config['MAX_CONTENT_LENGTH']=12*1024*1024
 
-def db(): c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; return c
+def db():
+ c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; return c
+
+def slugify(text):
+ text=(text or '').strip().lower(); text=re.sub(r'[^\w\u0600-\u06ff\s-]','',text,flags=re.UNICODE); text=re.sub(r'[\s_-]+','-',text).strip('-'); return text or uuid.uuid4().hex[:10]
+
+def unique_slug(c,name,pid=None):
+ base=slugify(name); slug=base; i=2
+ while True:
+  q='SELECT id FROM products WHERE slug=?'; a=[slug]
+  if pid is not None: q+=' AND id<>?'; a.append(pid)
+  if not c.execute(q,a).fetchone(): return slug
+  slug=f'{base}-{i}'; i+=1
 
 def init_db():
  c=db(); c.executescript('''CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);CREATE TABLE IF NOT EXISTS categories(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,slug TEXT UNIQUE NOT NULL);CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,slug TEXT UNIQUE NOT NULL,category_id INTEGER,brand TEXT DEFAULT '',model TEXT DEFAULT '',sku TEXT DEFAULT '',short_description TEXT DEFAULT '',description TEXT DEFAULT '',specs TEXT DEFAULT '',price REAL DEFAULT 0,sale_price REAL DEFAULT 0,stock INTEGER DEFAULT 0,color TEXT DEFAULT '',colors TEXT DEFAULT '',material TEXT DEFAULT '',finish TEXT DEFAULT '',length TEXT DEFAULT '',width TEXT DEFAULT '',height TEXT DEFAULT '',weight TEXT DEFAULT '',package_dimensions TEXT DEFAULT '',package_weight TEXT DEFAULT '',warranty TEXT DEFAULT '',warranty_company TEXT DEFAULT '',shipping_time TEXT DEFAULT '',shipping_cost REAL DEFAULT 0,free_shipping INTEGER DEFAULT 0,seo_title TEXT DEFAULT '',seo_description TEXT DEFAULT '',seo_keywords TEXT DEFAULT '',badge TEXT DEFAULT '',featured INTEGER DEFAULT 0,new_product INTEGER DEFAULT 0,bestseller INTEGER DEFAULT 0,active INTEGER DEFAULT 1,image TEXT DEFAULT '',gallery TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);''')
- for k,v in {'site_name':'شیرآلات مدرن','tagline':'ویترین آنلاین محصولات آشپزخانه و سرویس بهداشتی','phone':'09120000000','address':'تهران','hero_title':'خانه‌ای زیباتر با انتخابی حرفه‌ای','hero_text':'شیرآلات، سینک، گاز، هود و تجهیزات آشپزخانه را در یک ویترین مدرن ببینید.'}.items(): c.execute('INSERT OR IGNORE INTO settings VALUES(?,?)',(k,v))
+ for k,v in {'site_name':'فروشگاه حافظ','tagline':'ویترین آنلاین محصولات','phone':'09120000000','address':'تهران','hero_title':'انتخابی حرفه‌ای برای خانه شما','hero_text':'محصولات منتخب را در ویترین حافظ ببینید.'}.items(): c.execute('INSERT OR IGNORE INTO settings VALUES(?,?)',(k,v))
  if c.execute('SELECT COUNT(*) n FROM categories').fetchone()['n']==0:
   for n,s in [('شیرآلات','faucets'),('سینک','sinks'),('گاز','cookers'),('هود','hoods'),('تجهیزات آشپزخانه','kitchen')]: c.execute('INSERT INTO categories(name,slug) VALUES(?,?)',(n,s))
  c.commit(); c.close()
@@ -57,12 +69,22 @@ def admin_home():
 def admin_products():
  c=db(); cats=c.execute('SELECT * FROM categories ORDER BY name').fetchall()
  if request.method=='POST':
-  f=request.files.get('image'); img=''
-  if f and f.filename: ext=f.filename.rsplit('.',1)[-1].lower(); fn=secure_filename(f.filename.rsplit('.',1)[0])+'_'+uuid.uuid4().hex[:8]+'.'+ext; f.save(UP/fn); img=fn
-  name=request.form.get('name','').strip()
-  if name:
-   fields=['name','category_id','brand','model','sku','short_description','description','specs','price','sale_price','stock','color','colors','material','finish','length','width','height','weight','package_dimensions','package_weight','warranty','warranty_company','shipping_time','shipping_cost','seo_title','seo_description','seo_keywords','badge']; vals=[request.form.get(x,'') for x in fields]; vals[1]=request.form.get('category_id') or None
-   flags=[1 if request.form.get(x) else 0 for x in ['free_shipping','featured','new_product','bestseller']]; c.execute('INSERT INTO products('+','.join(fields)+',free_shipping,featured,new_product,bestseller,image,gallery) VALUES('+','.join('?' for _ in fields)+',?,?,?,?,?,?)',vals+flags+[img,request.form.get('gallery','')]); c.commit(); flash('محصول کامل با موفقیت اضافه شد.','ok')
+  try:
+   f=request.files.get('image'); img=''
+   if f and f.filename:
+    ext=f.filename.rsplit('.',1)[-1].lower(); fn=secure_filename(f.filename.rsplit('.',1)[0])+'_'+uuid.uuid4().hex[:8]+'.'+ext; f.save(UP/fn); img=fn
+   name=request.form.get('name','').strip()
+   if not name: flash('نام محصول الزامی است.','error'); return redirect(url_for('admin_products'))
+   fields=['name','category_id','brand','model','sku','short_description','description','specs','price','sale_price','stock','color','colors','material','finish','length','width','height','weight','package_dimensions','package_weight','warranty','warranty_company','shipping_time','shipping_cost','seo_title','seo_description','seo_keywords','badge']
+   vals=[request.form.get(x,'') for x in fields]; vals[1]=request.form.get('category_id') or None
+   for i in [8,9,10,25]:
+    try: vals[i]=float(vals[i] or 0) if i in [8,9,25] else int(vals[i] or 0)
+    except (ValueError,TypeError): vals[i]=0
+   flags=[1 if request.form.get(x) else 0 for x in ['free_shipping','featured','new_product','bestseller']]; slug=unique_slug(c,name)
+   columns=['slug']+fields+['free_shipping','featured','new_product','bestseller','image','gallery']; values=[slug]+vals+flags+[img,request.form.get('gallery','')]
+   c.execute('INSERT INTO products('+','.join(columns)+') VALUES('+','.join('?' for _ in values)+')',values); c.commit(); flash('محصول با موفقیت اضافه شد.','ok')
+  except Exception as e:
+   c.rollback(); flash('خطا در ذخیره محصول: '+str(e),'error')
  rows=c.execute('SELECT p.*,c.name category FROM products p LEFT JOIN categories c ON c.id=p.category_id ORDER BY p.id DESC').fetchall(); c.close(); return render_template('manage_products.html',products=rows,categories=cats)
 @app.route('/admin/products/edit/<int:pid>',methods=['GET','POST'])
 @admin
@@ -70,8 +92,13 @@ def edit_product(pid):
  c=db(); cats=c.execute('SELECT * FROM categories ORDER BY name').fetchall(); p=c.execute('SELECT * FROM products WHERE id=?',(pid,)).fetchone()
  if not p: c.close(); abort(404)
  if request.method=='POST':
-  fields=['name','category_id','brand','model','sku','short_description','description','specs','price','sale_price','stock','color','colors','material','finish','length','width','height','weight','package_dimensions','package_weight','warranty','warranty_company','shipping_time','shipping_cost','seo_title','seo_description','seo_keywords','badge','gallery']; vals=[request.form.get(x,'') for x in fields]; vals[1]=request.form.get('category_id') or None; flags=[1 if request.form.get(x) else 0 for x in ['free_shipping','featured','new_product','bestseller']]
-  sets=','.join(f'{x}=?' for x in fields)+',free_shipping=?,featured=?,new_product=?,bestseller=?'; c.execute('UPDATE products SET '+sets+' WHERE id=?',vals+flags+[pid]); c.commit(); flash('محصول ویرایش شد.','ok'); return redirect(url_for('admin_products'))
+  try:
+   fields=['name','category_id','brand','model','sku','short_description','description','specs','price','sale_price','stock','color','colors','material','finish','length','width','height','weight','package_dimensions','package_weight','warranty','warranty_company','shipping_time','shipping_cost','seo_title','seo_description','seo_keywords','badge','gallery']; vals=[request.form.get(x,'') for x in fields]; vals[1]=request.form.get('category_id') or None
+   for i in [8,9,10,26]:
+    try: vals[i]=float(vals[i] or 0) if i in [8,9,26] else int(vals[i] or 0)
+    except (ValueError,TypeError): vals[i]=0
+   flags=[1 if request.form.get(x) else 0 for x in ['free_shipping','featured','new_product','bestseller']]; sets=','.join(f'{x}=?' for x in fields)+',free_shipping=?,featured=?,new_product=?,bestseller=?,slug=?'; vals += flags+[unique_slug(c,request.form.get('name',''),pid)]; c.execute('UPDATE products SET '+sets+' WHERE id=?',vals+[pid]); c.commit(); flash('محصول ویرایش شد.','ok'); return redirect(url_for('admin_products'))
+  except Exception as e: c.rollback(); flash('خطا در ویرایش محصول: '+str(e),'error')
  c.close(); return render_template('edit_product.html',product=p,categories=cats)
 @app.post('/admin/products/delete/<int:pid>')
 @admin
