@@ -122,7 +122,9 @@ def security_headers(response):
 
 @app.before_request
 def protect_admin_requests():
-    if request.path.startswith('/admin/') and request.method in {'POST','PUT','PATCH','DELETE'}:
+    # The login form itself must remain reachable; protected mutations after
+    # authentication still require a same-origin Origin/Referer header.
+    if request.path.startswith('/admin/') and request.path != '/admin/login' and request.method in {'POST','PUT','PATCH','DELETE'}:
         origin=request.headers.get('Origin')
         referer=request.headers.get('Referer')
         host=request.host_url.rstrip('/')
@@ -172,121 +174,3 @@ def logout(): session.clear(); return redirect(url_for('home'))
 @admin
 def admin_home():
     c=db(); counts={k:c.execute(q).fetchone()['n'] for k,q in {'products':'SELECT COUNT(*) n FROM products','categories':'SELECT COUNT(*) n FROM categories','featured':'SELECT COUNT(*) n FROM products WHERE featured=1'}.items()}; c.close(); return render_template('admin.html',counts=counts)
-
-@app.route('/admin/products',methods=['GET','POST'])
-@admin
-def admin_products():
-    c=db(); cats=c.execute('SELECT * FROM categories ORDER BY name').fetchall()
-    if request.method=='POST':
-        try:
-            uploaded=[]
-            for f in request.files.getlist('image'):
-                if f and f.filename: uploaded.append(save_image(f))
-            img=uploaded[0] if uploaded else ''; gallery_names=uploaded[1:]
-            manual_gallery=[x.strip() for x in request.form.get('gallery','').split(',') if x.strip() and Path(x).name==x]
-            gallery=','.join(gallery_names+manual_gallery); name=request.form.get('name','').strip()
-            if not name: flash('نام محصول الزامی است.','error'); return redirect(url_for('admin_products'))
-            fields=['name','category_id','brand','model','sku','short_description','description','specs','price','sale_price','stock','color','colors','material','finish','length','width','height','weight','package_dimensions','package_weight','warranty','warranty_company','shipping_time','shipping_cost','seo_title','seo_description','seo_keywords','badge']
-            vals=[request.form.get(x,'') for x in fields]; vals[1]=request.form.get('category_id') or None
-            for i in [8,9,10,25]:
-                try: vals[i]=float(vals[i] or 0) if i in [8,9,25] else int(vals[i] or 0)
-                except (ValueError,TypeError): vals[i]=0
-            flags=[1 if request.form.get(x) else 0 for x in ['free_shipping','featured','new_product','bestseller']]; slug=unique_slug(c,name)
-            columns=['slug']+fields+['free_shipping','featured','new_product','bestseller','image','gallery']; values=[slug]+vals+flags+[img,gallery]
-            c.execute('INSERT INTO products('+','.join(columns)+') VALUES('+','.join('?' for _ in values)+')',values); c.commit(); flash(f'محصول با موفقیت اضافه شد؛ {len(uploaded)} تصویر ذخیره شد.','ok')
-        except ValueError as e: c.rollback(); flash(str(e),'error')
-        except Exception: c.rollback(); flash('خطا در ذخیره محصول.','error')
-    rows=c.execute('SELECT p.*,c.name category FROM products p LEFT JOIN categories c ON c.id=p.category_id ORDER BY p.id DESC').fetchall(); c.close(); return render_template('manage_products.html',products=rows,categories=cats)
-
-@app.route('/admin/products/edit/<int:pid>',methods=['GET','POST'])
-@admin
-def edit_product(pid):
-    c=db(); cats=c.execute('SELECT * FROM categories ORDER BY name').fetchall(); p=c.execute('SELECT * FROM products WHERE id=?',(pid,)).fetchone()
-    if not p: c.close(); abort(404)
-    if request.method=='POST':
-        try:
-            uploaded=[]
-            for f in request.files.getlist('image'):
-                if f and f.filename: uploaded.append(save_image(f))
-            current_gallery=[x.strip() for x in (p['gallery'] or '').split(',') if x.strip() and Path(x).name==x]
-            gallery_names=uploaded[1:] if uploaded else current_gallery; main_image=uploaded[0] if uploaded else (p['image'] or (current_gallery[0] if current_gallery else ''))
-            manual_gallery=[x.strip() for x in request.form.get('gallery','').split(',') if x.strip() and Path(x).name==x]; gallery=','.join(gallery_names+manual_gallery)
-            fields=['name','category_id','brand','model','sku','short_description','description','specs','price','sale_price','stock','color','colors','material','finish','length','width','height','weight','package_dimensions','package_weight','warranty','warranty_company','shipping_time','shipping_cost','seo_title','seo_description','seo_keywords','badge','gallery']; vals=[request.form.get(x,'') for x in fields]; vals[1]=request.form.get('category_id') or None
-            for i in [8,9,10,26]:
-                try: vals[i]=float(vals[i] or 0) if i in [8,9,26] else int(vals[i] or 0)
-                except (ValueError,TypeError): vals[i]=0
-            vals[-1]=gallery; flags=[1 if request.form.get(x) else 0 for x in ['free_shipping','featured','new_product','bestseller']]
-            sets=','.join(f'{x}=?' for x in fields)+',free_shipping=?,featured=?,new_product=?,bestseller=?,slug=?,image=?'; vals += flags+[unique_slug(c,request.form.get('name',''),pid),main_image]
-            c.execute('UPDATE products SET '+sets+' WHERE id=?',vals+[pid]); c.commit(); flash('محصول ویرایش شد.','ok'); return redirect(url_for('admin_products'))
-        except ValueError as e: c.rollback(); flash(str(e),'error')
-        except Exception: c.rollback(); flash('خطا در ویرایش محصول.','error')
-    c.close(); return render_template('edit_product.html',product=p,categories=cats)
-
-@app.post('/admin/products/delete/<int:pid>')
-@admin
-def delete_product(pid):
-    c=db(); row=c.execute('SELECT image,gallery FROM products WHERE id=?',(pid,)).fetchone(); c.execute('DELETE FROM products WHERE id=?',(pid,)); c.commit(); c.close()
-    if row:
-        for fn in [row['image']]+[x.strip() for x in (row['gallery'] or '').split(',') if x.strip()]:
-            if fn and Path(fn).name==fn:
-                try:(UP/fn).unlink(missing_ok=True)
-                except OSError: pass
-    return redirect(url_for('admin_products'))
-
-@app.route('/admin/settings',methods=['GET','POST'])
-@admin
-def admin_settings():
-    if request.method=='POST':
-        c=db()
-        for k in ['site_name','tagline','phone','address','hero_title','hero_text']: c.execute('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',(k,request.form.get(k,'')))
-        c.commit(); c.close(); flash('تنظیمات ذخیره شد.','ok')
-    return render_template('settings.html')
-
-@app.route('/admin/categories',methods=['GET','POST'])
-@admin
-def admin_categories():
-    c=db()
-    if request.method=='POST':
-        name=request.form.get('name','').strip(); slug=secure_filename(request.form.get('slug','').strip()) or uuid.uuid4().hex[:10]
-        if name:
-            try:c.execute('INSERT INTO categories(name,slug) VALUES(?,?)',(name,slug));c.commit();flash('دسته‌بندی ساخته شد.','ok')
-            except sqlite3.IntegrityError:flash('Slug تکراری است.','error')
-    rows=c.execute('SELECT c.*,COUNT(p.id) product_count FROM categories c LEFT JOIN products p ON p.category_id=c.id GROUP BY c.id ORDER BY c.id DESC').fetchall(); c.close(); return render_template('admin_categories.html',categories=rows)
-
-@app.post('/admin/categories/delete/<int:cid>')
-@admin
-def delete_category(cid):
-    c=db();c.execute('UPDATE products SET category_id=NULL WHERE category_id=?',(cid,));c.execute('DELETE FROM categories WHERE id=?',(cid,));c.commit();c.close();return redirect(url_for('admin_categories'))
-
-@app.route('/admin/media',methods=['GET','POST'])
-@admin
-def admin_media():
-    if request.method=='POST':
-        f=request.files.get('image')
-        try:
-            if f and f.filename: save_image(f); flash('تصویر آپلود شد.','ok')
-        except ValueError as e: flash(str(e),'error')
-    files=[{'name':p.name,'size':p.stat().st_size,'mtime':datetime.fromtimestamp(p.stat().st_mtime).strftime('%Y-%m-%d %H:%M')} for p in sorted(UP.iterdir(),key=lambda x:x.stat().st_mtime,reverse=True) if p.is_file()] if UP.exists() else [];return render_template('admin_media.html',files=files)
-
-@app.post('/admin/media/delete/<name>')
-@admin
-def delete_media(name):
-    safe=secure_filename(name); p=(UP/safe).resolve()
-    if safe==name and p.parent==UP.resolve() and p.is_file():p.unlink()
-    return redirect(url_for('admin_media'))
-
-@app.route('/admin/system')
-@admin
-def admin_system():
-    c=db();data={'products':c.execute('SELECT COUNT(*) n FROM products').fetchone()['n'],'categories':c.execute('SELECT COUNT(*) n FROM categories').fetchone()['n'],'settings':c.execute('SELECT COUNT(*) n FROM settings').fetchone()['n']};c.close();data.update({'database_size':DB.stat().st_size if DB.exists() else 0,'uploads_count':len([p for p in UP.iterdir() if p.is_file()]),'uploads_size':sum(p.stat().st_size for p in UP.iterdir() if p.is_file())});return render_template('admin_system.html',data=data)
-
-@app.route('/admin/backup')
-@admin
-def admin_backup():
-    backup=BASE/'instance'/f'backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.db';shutil.copy2(DB,backup)
-    try: return send_file(backup,as_attachment=True,download_name=backup.name)
-    finally:
-        try: backup.unlink(missing_ok=True)
-        except OSError: pass
-
-if __name__=='__main__':app.run(host='0.0.0.0',port=int(os.getenv('PORT',5000)))
