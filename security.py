@@ -8,7 +8,7 @@ from flask import abort, request
 _LOGIN_WINDOW = 300
 _LOGIN_LIMIT = 5
 _attempts = defaultdict(deque)
-ADMIN_PREFIX = os.getenv("ADMIN_PATH", "manage-7f4c9b2d6e8a1f5c3b9d")
+ADMIN_PREFIX = os.getenv("ADMIN_PATH", "manage-7f4c9b2d6e8a1f5c3b9d").strip("/")
 
 
 def _client_ip():
@@ -18,35 +18,53 @@ def _client_ip():
 
 
 class AdminPathMiddleware:
-    """Expose the admin area only through a long, non-obvious public prefix."""
+    """Expose Flask's existing /admin routes only through a private public prefix."""
     def __init__(self, application):
         self.application = application
 
     def __call__(self, environ, start_response):
         path = environ.get("PATH_INFO", "")
-        secret = "/" + ADMIN_PREFIX.strip("/")
+        secret = "/" + ADMIN_PREFIX
         if path == "/admin" or path.startswith("/admin/"):
-            return self._deny(environ, start_response)
+            return self._deny(start_response)
         if path == secret or path.startswith(secret + "/"):
             environ["PATH_INFO"] = "/admin" + path[len(secret):]
-        return self.application(environ, self._rewrite_location(start_response, secret))
 
-    @staticmethod
-    def _deny(environ, start_response):
-        body = b"Not Found"
-        start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8"), ("Content-Length", str(len(body)))])
+        captured = {}
+        def capture(status, headers, exc_info=None):
+            captured["status"] = status
+            captured["headers"] = headers
+            captured["exc_info"] = exc_info
+
+        result = self.application(environ, capture)
+        body = b"".join(result)
+        if hasattr(result, "close"):
+            result.close()
+
+        headers = list(captured.get("headers", []))
+        content_type = next((v for k, v in headers if k.lower() == "content-type"), "")
+        if "text/html" in content_type:
+            # Flask's url_for() still generates the internal /admin routes.
+            # Rewrite those links/forms in rendered HTML so every admin button
+            # stays inside the private public prefix.
+            body = body.replace(b"/admin", secret.encode("utf-8"))
+
+        new_headers = []
+        for name, value in headers:
+            if name.lower() == "location":
+                value = value.replace("/admin/", secret + "/").replace("/admin", secret)
+            if name.lower() == "content-length":
+                value = str(len(body))
+            new_headers.append((name, value))
+
+        start_response(captured.get("status", "500 Internal Server Error"), new_headers, captured.get("exc_info"))
         return [body]
 
     @staticmethod
-    def _rewrite_location(start_response, secret):
-        def wrapper(status, headers, exc_info=None):
-            rewritten = []
-            for name, value in headers:
-                if name.lower() == "location":
-                    value = value.replace("/admin/", secret + "/").replace("/admin", secret)
-                rewritten.append((name, value))
-            return start_response(status, rewritten, exc_info)
-        return wrapper
+    def _deny(start_response):
+        body = b"Not Found"
+        start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8"), ("Content-Length", str(len(body)))])
+        return [body]
 
 
 def init_security(app):
@@ -75,8 +93,6 @@ def init_security(app):
         if host not in allowed and not host.endswith(".up.railway.app"):
             abort(400)
 
-        # Login is a browser navigation/form submission and must not be blocked
-        # by the strict Origin/Referer check. Protected admin mutations remain checked.
         if request.path.startswith("/admin") and request.path != "/admin/login" and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
             origin = request.headers.get("Origin")
             referer = request.headers.get("Referer")
