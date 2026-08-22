@@ -2,14 +2,14 @@ import os, sqlite3, uuid, shutil, json, re, time
 from pathlib import Path
 from functools import wraps
 from datetime import datetime, timedelta
-from flask import Flask, render_template, request, redirect, url_for, session, flash, abort, send_file, make_response
+from flask import Flask, render_template, request, redirect, url_for, session, flash, abort, send_file, send_from_directory, make_response
 from werkzeug.utils import secure_filename
 
 BASE=Path(__file__).resolve().parent
-DB=BASE/'instance/store.db'
-UP=BASE/'static/uploads'
+DB=Path('/data')/f'store.db'
+UP=Path('/data')/'uploads'
 UP.mkdir(parents=True,exist_ok=True)
-DB.parent.mkdir(parents=True,exist_ok=True)
+Path('/data').mkdir(parents=True,exist_ok=True)
 
 SECRET_KEY=os.getenv('SECRET_KEY')
 if not SECRET_KEY:
@@ -24,6 +24,10 @@ app.config.update(
     SESSION_COOKIE_SECURE=os.getenv('COOKIE_SECURE','1').lower() in ('1','true','yes'),
     PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
 )
+@app.route('/static/uploads/<path:filename>')
+def uploaded_file(filename):
+    return send_from_directory(UP, filename)
+
 ALLOWED_IMAGE_EXT={'jpg','jpeg','png','webp'}
 ALLOWED_IMAGE_TYPES={'jpg':b'\xff\xd8\xff','jpeg':b'\xff\xd8\xff','png':b'\x89PNG\r\n\x1a\n','webp':b'RIFF'}
 LOGIN_WINDOW=300
@@ -283,7 +287,7 @@ def admin_system():
 @app.route('/admin/backup')
 @admin
 def admin_backup():
-    backup=BASE/'instance'/f'backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.db';shutil.copy2(DB,backup)
+    backup=Path('/data')/f'backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.db';shutil.copy2(DB,backup)
     try: return send_file(backup,as_attachment=True,download_name=backup.name)
     finally:
         try: backup.unlink(missing_ok=True)
