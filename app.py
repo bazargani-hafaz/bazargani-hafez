@@ -6,8 +6,10 @@ from flask import Flask, render_template, request, redirect, url_for, session, f
 from werkzeug.utils import secure_filename
 
 BASE=Path(__file__).resolve().parent
-DB=BASE/'instance/store.db'
-UP=BASE/'static/uploads'
+DATA_DIR=Path(os.getenv('RAILWAY_DATA_PATH','/data'))
+DB=DATA_DIR/'store.db'
+UP=DATA_DIR/'uploads'
+DATA_DIR.mkdir(parents=True,exist_ok=True)
 UP.mkdir(parents=True,exist_ok=True)
 DB.parent.mkdir(parents=True,exist_ok=True)
 
