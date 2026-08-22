@@ -1,8 +1,8 @@
-"""Railway Volume bootstrap for persistent store data.
+"""Bootstrap persistent SQLite/uploads storage on Railway Volume.
 
-When /data is mounted as a Railway Volume, move the existing local SQLite
-store and uploaded product images into it on first boot, then transparently
-map the application's existing paths to the persistent locations.
+The application keeps using its existing paths (instance/store.db and
+static/uploads), while these paths are transparently backed by /data when a
+Railway Volume is mounted.
 """
 from pathlib import Path
 import shutil
@@ -25,27 +25,27 @@ def _copy_tree_contents(src: Path, dst: Path) -> None:
             shutil.copy2(item, target)
 
 
-def _link_persistent_path(local: Path, persistent: Path) -> None:
+def _ensure_link(local: Path, persistent: Path) -> None:
     persistent.parent.mkdir(parents=True, exist_ok=True)
     if local.is_symlink():
         try:
             if local.resolve() == persistent.resolve():
                 return
         except OSError:
-            pass
-        local.unlink()
+            local.unlink()
+        else:
+            local.unlink()
     elif local.exists():
         if local.is_dir():
-            # Content is copied before this function is called.
             shutil.rmtree(local)
         else:
             local.unlink()
-    local.symlink_to(persistent, target_is_directory=persistent.is_dir() or not persistent.suffix)
+    local.symlink_to(persistent, target_is_directory=True)
 
 
 def bootstrap_volume() -> None:
-    # No mounted Railway Volume: keep normal local development behaviour.
-    if not VOLUME.exists() or not VOLUME.is_dir():
+    # Local development without a mounted Volume keeps the normal filesystem.
+    if not VOLUME.is_dir():
         return
 
     data_instance = VOLUME / "instance"
@@ -53,26 +53,26 @@ def bootstrap_volume() -> None:
     local_instance = BASE / "instance"
     local_uploads = BASE / "static" / "uploads"
 
-    # First deployment: preserve any existing data before replacing local paths.
     data_instance.mkdir(parents=True, exist_ok=True)
     data_uploads.mkdir(parents=True, exist_ok=True)
+
+    # Preserve existing application data on the first migration.
     local_db = local_instance / "store.db"
     persistent_db = data_instance / "store.db"
     if local_db.exists() and not persistent_db.exists():
         shutil.copy2(local_db, persistent_db)
     _copy_tree_contents(local_uploads, data_uploads)
 
-    # The application already uses BASE/instance/store.db and BASE/static/uploads.
-    # Symlinks let the existing application use the persistent Volume without
-    # changing every route that handles products and media.
-    _link_persistent_path(local_instance, data_instance)
+    _ensure_link(local_instance, data_instance)
     local_uploads.parent.mkdir(parents=True, exist_ok=True)
-    _link_persistent_path(local_uploads, data_uploads)
+    _ensure_link(local_uploads, data_uploads)
+
+    # Fail fast if a mounted Volume cannot actually be used. Silent fallback
+    # to ephemeral storage would make products appear to disappear after deploy.
+    if not local_db.parent.is_symlink() or local_db.parent.resolve() != data_instance.resolve():
+        raise RuntimeError("Railway persistence setup failed: instance is not backed by /data")
+    if not local_uploads.is_symlink() or local_uploads.resolve() != data_uploads.resolve():
+        raise RuntimeError("Railway persistence setup failed: uploads are not backed by /data")
 
 
-try:
-    bootstrap_volume()
-except Exception:
-    # Never prevent the web process from starting because of a persistence
-    # bootstrap problem. The application can still run using its normal paths.
-    pass
+bootstrap_volume()
