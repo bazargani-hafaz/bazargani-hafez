@@ -29,7 +29,6 @@ class AdminPathMiddleware:
             return self._deny(environ, start_response)
         if path == secret or path.startswith(secret + "/"):
             environ["PATH_INFO"] = "/admin" + path[len(secret):]
-            environ["SCRIPT_NAME"] = environ.get("SCRIPT_NAME", "")
         return self.application(environ, self._rewrite_location(start_response, secret))
 
     @staticmethod
@@ -62,7 +61,6 @@ def init_security(app):
         MAX_CONTENT_LENGTH=min(int(app.config.get("MAX_CONTENT_LENGTH", 10 * 1024 * 1024)), 10 * 1024 * 1024),
     )
 
-    # Must be installed before Flask starts serving requests.
     app.wsgi_app = AdminPathMiddleware(app.wsgi_app)
 
     @app.before_request
@@ -77,7 +75,9 @@ def init_security(app):
         if host not in allowed and not host.endswith(".up.railway.app"):
             abort(400)
 
-        if request.path.startswith("/admin") and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        # Login is a browser navigation/form submission and must not be blocked
+        # by the strict Origin/Referer check. Protected admin mutations remain checked.
+        if request.path.startswith("/admin") and request.path != "/admin/login" and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
             origin = request.headers.get("Origin")
             referer = request.headers.get("Referer")
             expected = request.host_url.rstrip("/")
