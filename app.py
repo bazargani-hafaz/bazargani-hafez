@@ -4,6 +4,7 @@ from functools import wraps
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, redirect, url_for, session, flash, abort, send_file, make_response
 from werkzeug.utils import secure_filename
+from security import init_security
 
 BASE=Path(__file__).resolve().parent
 DB=BASE/'instance/store.db'
@@ -24,6 +25,7 @@ app.config.update(
     SESSION_COOKIE_SECURE=os.getenv('COOKIE_SECURE','1').lower() in ('1','true','yes'),
     PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
 )
+init_security(app)
 ALLOWED_IMAGE_EXT={'jpg','jpeg','png','webp'}
 ALLOWED_IMAGE_TYPES={'jpg':b'\xff\xd8\xff','jpeg':b'\xff\xd8\xff','png':b'\x89PNG\r\n\x1a\n','webp':b'RIFF'}
 LOGIN_WINDOW=300
@@ -122,8 +124,7 @@ def security_headers(response):
 
 @app.before_request
 def protect_admin_requests():
-    # The login form itself must remain reachable; protected mutations after
-    # authentication still require a same-origin Origin/Referer header.
+    # Login is handled by security.py; protected mutations remain same-origin checked here too.
     if request.path.startswith('/admin/') and request.path != '/admin/login' and request.method in {'POST','PUT','PATCH','DELETE'}:
         origin=request.headers.get('Origin')
         referer=request.headers.get('Referer')
