@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from flask import Flask, render_template, request, redirect, url_for, session, flash, abort, send_file, make_response, Response
 from werkzeug.utils import secure_filename
 from security import init_security
-from product_images import resolve_and_cache, start_warmup
+from product_images import request_resolve_async, start_warmup
 
 BASE=Path(__file__).resolve().parent
 DB=BASE/'instance/store.db'
@@ -71,7 +71,6 @@ def product_image_src(product):
     return '/product-image/'+str(product['id']) if product and product['id'] else ''
 
 init_db();migrate()
-# Import the complete 1405/03/03 price list idempotently on startup.
 from price_list_seed import import_price_list
 import_price_list(db)
 
@@ -86,10 +85,9 @@ def product_image(product_id):
     image=(p['image'] or '').strip()
     if image.startswith('http://') or image.startswith('https://'):
         return redirect(image,code=302)
-    resolved=resolve_and_cache(str(DB),product_id)
-    if resolved:
-        return redirect(resolved,code=302)
-    return Response('',status=404)
+    # Never perform network scraping inside a web request. Queue it in the background.
+    request_resolve_async(str(DB), product_id)
+    return Response(b'<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1" viewBox="0 0 1 1"><rect width="1" height="1" fill="none"/></svg>', status=200, mimetype='image/svg+xml', headers={'Cache-Control':'no-store'})
 
 @app.after_request
 def security_headers(response):
@@ -138,9 +136,6 @@ def logout():session.clear();return redirect(url_for('home'))
 def admin_home():
     c=db();counts={k:c.execute(q).fetchone()['n'] for k,q in {'products':'SELECT COUNT(*) n FROM products','categories':'SELECT COUNT(*) n FROM categories','featured':'SELECT COUNT(*) n FROM products WHERE featured=1'}.items()};c.close();return render_template('admin.html',counts=counts)
 
-# Register complete admin CRUD, analytics, security and backup routes after core app routes.
 from admin_routes import register_admin_routes
 register_admin_routes(app)
-
-# Resolve missing product photos in the background so the full catalog gets populated without delaying startup.
 start_warmup(str(DB))
