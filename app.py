@@ -6,7 +6,6 @@ from flask import Flask, render_template, request, redirect, url_for, session, f
 from werkzeug.utils import secure_filename
 from security import init_security
 from product_images import request_resolve_async, start_warmup
-
 BASE=Path(__file__).resolve().parent
 DB=BASE/'instance/store.db'
 UP=BASE/'static/uploads'
@@ -18,13 +17,10 @@ app.config.update(MAX_CONTENT_LENGTH=10*1024*1024,SESSION_COOKIE_HTTPONLY=True,S
 init_security(app)
 ALLOWED_IMAGE_EXT={'jpg','jpeg','png','webp'}; ALLOWED_IMAGE_TYPES={'jpg':b'\xff\xd8\xff','jpeg':b'\xff\xd8\xff','png':b'\x89PNG\r\n\x1a\n','webp':b'RIFF'}
 LOGIN_WINDOW=300; LOGIN_LIMIT=8; _login_attempts={}
-
 def db():
     c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; return c
-
 def slugify(text):
     text=(text or '').strip().lower(); text=re.sub(r'[^\w\u0600-\u06ff\s-]','',text,flags=re.UNICODE); text=re.sub(r'[\s_-]+','-',text).strip('-'); return text or uuid.uuid4().hex[:10]
-
 def unique_slug(c,name,pid=None):
     base=slugify(name); slug=base; i=2
     while True:
@@ -32,20 +28,17 @@ def unique_slug(c,name,pid=None):
         if pid is not None: q+=' AND id<>?'; a.append(pid)
         if not c.execute(q,a).fetchone(): return slug
         slug=f'{base}-{i}'; i+=1
-
 def init_db():
     c=db(); c.executescript('''CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);CREATE TABLE IF NOT EXISTS categories(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,slug TEXT UNIQUE NOT NULL);CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,slug TEXT UNIQUE NOT NULL,category_id INTEGER,brand TEXT DEFAULT '',model TEXT DEFAULT '',sku TEXT DEFAULT '',short_description TEXT DEFAULT '',description TEXT DEFAULT '',specs TEXT DEFAULT '',price REAL DEFAULT 0,sale_price REAL DEFAULT 0,stock INTEGER DEFAULT 0,color TEXT DEFAULT '',colors TEXT DEFAULT '',material TEXT DEFAULT '',finish TEXT DEFAULT '',length TEXT DEFAULT '',width TEXT DEFAULT '',height TEXT DEFAULT '',weight TEXT DEFAULT '',package_dimensions TEXT DEFAULT '',package_weight TEXT DEFAULT '',warranty TEXT DEFAULT '',warranty_company TEXT DEFAULT '',shipping_time TEXT DEFAULT '',shipping_cost REAL DEFAULT 0,free_shipping INTEGER DEFAULT 0,seo_title TEXT DEFAULT '',seo_description TEXT DEFAULT '',seo_keywords TEXT DEFAULT '',badge TEXT DEFAULT '',featured INTEGER DEFAULT 0,new_product INTEGER DEFAULT 0,bestseller INTEGER DEFAULT 0,active INTEGER DEFAULT 1,image TEXT DEFAULT '',gallery TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);''')
     for k,v in {'site_name':'فروشگاه حافظ','tagline':'ویترین آنلاین محصولات','phone':'09120000000','address':'تهران','hero_title':'انتخابی حرفه‌ای برای خانه شما','hero_text':'محصولات منتخب را در ویترین حافظ ببینید.'}.items(): c.execute('INSERT OR IGNORE INTO settings VALUES(?,?)',(k,v))
     if c.execute('SELECT COUNT(*) n FROM categories').fetchone()['n']==0:
         for n,s in [('شیرآلات','faucets'),('سینک','sinks'),('گاز','cookers'),('هود','hoods'),('تجهیزات آشپزخانه','kitchen')]: c.execute('INSERT INTO categories(name,slug) VALUES(?,?)',(n,s))
     c.commit(); c.close()
-
 def migrate():
     c=db(); cols={r['name'] for r in c.execute('PRAGMA table_info(products)')}; additions={'model':'TEXT DEFAULT ""','sku':'TEXT DEFAULT ""','short_description':'TEXT DEFAULT ""','price':'REAL DEFAULT 0','sale_price':'REAL DEFAULT 0','stock':'INTEGER DEFAULT 0','color':'TEXT DEFAULT ""','colors':'TEXT DEFAULT ""','material':'TEXT DEFAULT ""','finish':'TEXT DEFAULT ""','length':'TEXT DEFAULT ""','width':'TEXT DEFAULT ""','height':'TEXT DEFAULT ""','weight':'TEXT DEFAULT ""','package_dimensions':'TEXT DEFAULT ""','package_weight':'TEXT DEFAULT ""','warranty':'TEXT DEFAULT ""','warranty_company':'TEXT DEFAULT ""','shipping_time':'TEXT DEFAULT ""','shipping_cost':'REAL DEFAULT 0','free_shipping':'INTEGER DEFAULT 0','seo_title':'TEXT DEFAULT ""','seo_description':'TEXT DEFAULT ""','seo_keywords':'TEXT DEFAULT ""','badge':'TEXT DEFAULT ""','new_product':'INTEGER DEFAULT 0','bestseller':'INTEGER DEFAULT 0','gallery':'TEXT DEFAULT ""'}
     for k,v in additions.items():
         if k not in cols: c.execute(f'ALTER TABLE products ADD COLUMN {k} {v}')
     c.commit(); c.close()
-
 def client_key(): return request.headers.get('X-Forwarded-For',request.remote_addr or 'unknown').split(',')[0].strip()
 def rate_limited(key):
     now=time.time(); arr=[t for t in _login_attempts.get(key,[]) if now-t<LOGIN_WINDOW]; _login_attempts[key]=arr; return len(arr)>=LOGIN_LIMIT
@@ -63,21 +56,16 @@ def save_image(file):
     if not valid_image(file):raise ValueError('فرمت تصویر مجاز نیست.')
     name=secure_filename(file.filename);ext=name.rsplit('.',1)[-1].lower();stem=secure_filename(name.rsplit('.',1)[0]) or 'product';fn=f'{stem}_{uuid.uuid4().hex[:12]}.{ext}';file.save(UP/fn);return fn
 def safe_next(value): return value if value and value.startswith('/') and not value.startswith('//') else url_for('admin_home')
-
 def product_image_src(product):
     image=(product['image'] or '').strip() if product else ''
     if image.startswith('http://') or image.startswith('https://'): return image
     if image: return '/static/uploads/'+image
     return '/product-image/'+str(product['id']) if product and product['id'] else ''
-
 init_db();migrate()
 from price_list_seed import import_price_list
 import_price_list(db)
-
 @app.template_global('product_image_src')
-def _product_image_src(product):
-    return product_image_src(product)
-
+def _product_image_src(product): return product_image_src(product)
 @app.route('/product-image/<int:product_id>')
 def product_image(product_id):
     c=db();p=c.execute('SELECT id,image FROM products WHERE id=? AND active=1',(product_id,)).fetchone();c.close()
@@ -85,10 +73,12 @@ def product_image(product_id):
     image=(p['image'] or '').strip()
     if image.startswith('http://') or image.startswith('https://'):
         return redirect(image,code=302)
-    # Never perform network scraping inside a web request. Queue it in the background.
+    if image:
+        local=UP/os.path.basename(image)
+        if local.is_file():
+            response=make_response(send_file(local)); response.headers['Cache-Control']='public, max-age=86400'; return response
     request_resolve_async(str(DB), product_id)
     return Response(b'<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1" viewBox="0 0 1 1"><rect width="1" height="1" fill="none"/></svg>', status=200, mimetype='image/svg+xml', headers={'Cache-Control':'no-store'})
-
 @app.after_request
 def security_headers(response):
     response.headers.setdefault('X-Content-Type-Options','nosniff');response.headers.setdefault('X-Frame-Options','SAMEORIGIN');response.headers.setdefault('Referrer-Policy','strict-origin-when-cross-origin');response.headers.setdefault('Permissions-Policy','camera=(), microphone=(), geolocation=()')
@@ -135,7 +125,6 @@ def logout():session.clear();return redirect(url_for('home'))
 @admin
 def admin_home():
     c=db();counts={k:c.execute(q).fetchone()['n'] for k,q in {'products':'SELECT COUNT(*) n FROM products','categories':'SELECT COUNT(*) n FROM categories','featured':'SELECT COUNT(*) n FROM products WHERE featured=1'}.items()};c.close();return render_template('admin.html',counts=counts)
-
 from admin_routes import register_admin_routes
 register_admin_routes(app)
 start_warmup(str(DB))
