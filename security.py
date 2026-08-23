@@ -18,17 +18,28 @@ def _client_ip():
 
 
 class AdminPathMiddleware:
-    """Expose Flask's existing /admin routes only through a private public prefix."""
+    """Map the public private admin prefix to Flask's internal /admin routes."""
     def __init__(self, application):
         self.application = application
 
+    @staticmethod
+    def _deny(environ, start_response):
+        body = b"Not Found"
+        start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8"), ("Content-Length", str(len(body)))])
+        return [body]
+
     def __call__(self, environ, start_response):
-        path = environ.get("PATH_INFO", "")
+        path = environ.get("PATH_INFO", "") or "/"
         secret = "/" + ADMIN_PREFIX
-        if path == "/admin" or path.startswith("/admin/"):
-            return self._deny(start_response)
-        if path == secret or path.startswith(secret + "/"):
-            environ["PATH_INFO"] = "/admin" + path[len(secret):]
+        internal = path == secret or path.startswith(secret + "/")
+
+        if (path == "/admin" or path.startswith("/admin/")) and not internal:
+            return self._deny(environ, start_response)
+
+        if internal:
+            suffix = path[len(secret):] or "/"
+            environ["PATH_INFO"] = "/admin" + suffix
+            environ["HAFEZ_PRIVATE_ADMIN"] = "1"
 
         captured = {}
         def capture(status, headers, exc_info=None):
@@ -44,9 +55,8 @@ class AdminPathMiddleware:
         headers = list(captured.get("headers", []))
         content_type = next((v for k, v in headers if k.lower() == "content-type"), "")
         if "text/html" in content_type:
-            # Flask's url_for() still generates the internal /admin routes.
-            # Rewrite those links/forms in rendered HTML so every admin button
-            # stays inside the private public prefix.
+            # url_for() uses Flask's internal /admin routes. Rewrite only the
+            # rendered HTML so browser navigation remains on the private prefix.
             body = body.replace(b"/admin", secret.encode("utf-8"))
 
         new_headers = []
@@ -58,12 +68,6 @@ class AdminPathMiddleware:
             new_headers.append((name, value))
 
         start_response(captured.get("status", "500 Internal Server Error"), new_headers, captured.get("exc_info"))
-        return [body]
-
-    @staticmethod
-    def _deny(start_response):
-        body = b"Not Found"
-        start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8"), ("Content-Length", str(len(body)))])
         return [body]
 
 
@@ -97,13 +101,11 @@ def init_security(app):
             origin = request.headers.get("Origin")
             referer = request.headers.get("Referer")
             expected = request.host_url.rstrip("/")
-            if origin:
-                if origin.rstrip("/") != expected:
-                    abort(403)
-            elif referer:
-                if not referer.startswith(expected + "/"):
-                    abort(403)
-            else:
+            if origin and origin.rstrip("/") != expected:
+                abort(403)
+            if not origin and referer and not referer.startswith(expected + "/"):
+                abort(403)
+            if not origin and not referer:
                 abort(403)
 
         if request.path == "/admin/login" and request.method == "POST":
