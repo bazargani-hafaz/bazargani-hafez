@@ -5,6 +5,11 @@ from werkzeug.utils import secure_filename
 
 
 def register_admin_routes(app):
+    # Prevent duplicate registration when the module is initialized more than once
+    # (e.g. import/reload paths in the production process).
+    if 'admin_products' in app.view_functions:
+        return
+
     def deps():
         from app import db, save_image, UP, unique_slug, slugify, DB
         return db, save_image, UP, unique_slug, slugify, DB
