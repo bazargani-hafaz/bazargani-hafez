@@ -1,4 +1,5 @@
 import re
+import sqlite3
 import threading
 from html import unescape
 from urllib.parse import quote_plus, urljoin
@@ -7,8 +8,12 @@ from urllib.request import Request, urlopen
 SOURCE_SEARCH = "https://citysazeh.com/?s={query}&post_type=product"
 USER_AGENT = "Mozilla/5.0 (compatible; HafezProductImageResolver/1.0)"
 _lock = threading.Lock()
+_pending = set()
 
-def _get(url, timeout=12):
+# Tiny valid SVG used while an exact product image is being resolved in the background.
+PLACEHOLDER_SVG = b'<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1" viewBox="0 0 1 1"><rect width="1" height="1" fill="none"/></svg>'
+
+def _get(url, timeout=8):
     req = Request(url, headers={"User-Agent": USER_AGENT, "Accept-Language": "fa-IR,fa;q=0.9,en;q=0.6"})
     with urlopen(req, timeout=timeout) as r:
         return r.read().decode("utf-8", "ignore")
@@ -58,7 +63,6 @@ def resolve_product_image(product):
     return None
 
 def resolve_and_cache(db_path, product_id):
-    import sqlite3
     with _lock:
         c = sqlite3.connect(db_path)
         c.row_factory = sqlite3.Row
@@ -75,16 +79,28 @@ def resolve_and_cache(db_path, product_id):
         c.close()
         return image
 
+def _background_resolve(db_path, product_id):
+    try:
+        resolve_and_cache(db_path, product_id)
+    finally:
+        with _lock:
+            _pending.discard((db_path, product_id))
+
+def request_resolve_async(db_path, product_id):
+    key = (db_path, int(product_id))
+    with _lock:
+        if key in _pending:
+            return
+        _pending.add(key)
+    threading.Thread(target=_background_resolve, args=key, daemon=True, name=f"product-image-{product_id}").start()
+
 def warm_missing_images(db_path):
-    import sqlite3
     c = sqlite3.connect(db_path)
     ids = [r[0] for r in c.execute("SELECT id FROM products WHERE (image IS NULL OR image='') AND active=1").fetchall()]
     c.close()
+    # Queue resolutions without blocking Flask's request workers.
     for product_id in ids:
-        try:
-            resolve_and_cache(db_path, product_id)
-        except Exception:
-            pass
+        request_resolve_async(db_path, product_id)
 
 def start_warmup(db_path):
     threading.Thread(target=warm_missing_images, args=(db_path,), daemon=True, name="product-image-warmup").start()
