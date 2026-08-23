@@ -63,6 +63,9 @@ def save_image(file):
     name=secure_filename(file.filename);ext=name.rsplit('.',1)[-1].lower();stem=secure_filename(name.rsplit('.',1)[0]) or 'product';fn=f'{stem}_{uuid.uuid4().hex[:12]}.{ext}';file.save(UP/fn);return fn
 def safe_next(value): return value if value and value.startswith('/') and not value.startswith('//') else url_for('admin_home')
 init_db();migrate()
+# Import the complete 1405/03/03 price list idempotently on startup.
+from price_list_seed import import_price_list
+import_price_list(db)
 @app.after_request
 def security_headers(response):
     response.headers.setdefault('X-Content-Type-Options','nosniff');response.headers.setdefault('X-Frame-Options','SAMEORIGIN');response.headers.setdefault('Referrer-Policy','strict-origin-when-cross-origin');response.headers.setdefault('Permissions-Policy','camera=(), microphone=(), geolocation=()')
