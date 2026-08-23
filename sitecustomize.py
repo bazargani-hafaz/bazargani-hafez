@@ -1,6 +1,8 @@
 """Bootstrap persistent SQLite/uploads storage on Railway Volume and security hooks."""
 from pathlib import Path
 import shutil
+import os
+import sqlite3
 
 BASE = Path(__file__).resolve().parent
 VOLUME = Path("/data")
@@ -66,7 +68,29 @@ def bootstrap_volume() -> None:
         raise RuntimeError("Railway persistence setup failed: uploads are not backed by /data")
 
 
+def cleanup_catalog_once() -> None:
+    if os.getenv("CLEANUP_PRODUCTS") != "1":
+        return
+    db_path = VOLUME / "instance" / "store.db"
+    if db_path.exists():
+        c = sqlite3.connect(db_path)
+        try:
+            c.execute("DELETE FROM products")
+            c.commit()
+        finally:
+            c.close()
+    uploads = VOLUME / "uploads"
+    if uploads.is_dir():
+        for item in uploads.iterdir():
+            if item.is_file() or item.is_symlink():
+                try:
+                    item.unlink()
+                except OSError:
+                    pass
+
+
 bootstrap_volume()
+cleanup_catalog_once()
 
 # Prevent the old PDF seed from repopulating the catalog after the requested cleanup.
 try:
