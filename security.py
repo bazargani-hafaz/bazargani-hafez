@@ -33,11 +33,14 @@ class AdminPathMiddleware:
         secret = "/" + ADMIN_PREFIX
         internal = path == secret or path.startswith(secret + "/")
 
-        if (path == "/admin" or path.startswith("/admin/")) and not internal:
+        # Never expose Flask's internal admin namespace publicly.
+        if (path == "/admin" or path.startswith("/admin/")) and not environ.get("HAFEZ_PRIVATE_ADMIN"):
             return self._deny(environ, start_response)
 
         if internal:
-            suffix = path[len(secret):] or "/"
+            # IMPORTANT: /manage-... maps to /admin (not /admin/), because the
+            # Flask dashboard route is registered exactly as /admin.
+            suffix = path[len(secret):]
             environ["PATH_INFO"] = "/admin" + suffix
             environ["HAFEZ_PRIVATE_ADMIN"] = "1"
 
@@ -55,8 +58,6 @@ class AdminPathMiddleware:
         headers = list(captured.get("headers", []))
         content_type = next((v for k, v in headers if k.lower() == "content-type"), "")
         if "text/html" in content_type:
-            # url_for() uses Flask's internal /admin routes. Rewrite only the
-            # rendered HTML so browser navigation remains on the private prefix.
             body = body.replace(b"/admin", secret.encode("utf-8"))
 
         new_headers = []
