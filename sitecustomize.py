@@ -68,6 +68,13 @@ def bootstrap_volume() -> None:
 
 bootstrap_volume()
 
+# Prevent the old PDF seed from repopulating the catalog after the requested cleanup.
+try:
+    import price_list_seed
+    price_list_seed.import_price_list = lambda db: None
+except ImportError:
+    pass
+
 # Install security hooks without requiring changes to the application's route code.
 # sitecustomize is loaded before app.py by Python when this repository is on sys.path.
 try:
