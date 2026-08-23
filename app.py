@@ -62,8 +62,6 @@ def product_image_src(product):
     if image: return '/static/uploads/'+image
     return '/product-image/'+str(product['id']) if product and product['id'] else ''
 init_db();migrate()
-from price_list_seed import import_price_list
-import_price_list(db)
 @app.template_global('product_image_src')
 def _product_image_src(product): return product_image_src(product)
 @app.route('/product-image/<int:product_id>')
