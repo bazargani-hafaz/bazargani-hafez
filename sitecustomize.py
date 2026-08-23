@@ -1,8 +1,10 @@
-"""Bootstrap persistent SQLite/uploads storage on Railway Volume and security hooks."""
+"""Railway bootstrap, persistent storage, catalog import and security hooks."""
 from pathlib import Path
 import shutil
 import os
 import sqlite3
+import threading
+import time
 
 BASE = Path(__file__).resolve().parent
 VOLUME = Path("/data")
@@ -92,15 +94,27 @@ def cleanup_catalog_once() -> None:
 bootstrap_volume()
 cleanup_catalog_once()
 
-# Prevent the old PDF seed from repopulating the catalog after the requested cleanup.
-try:
-    import price_list_seed
-    price_list_seed.import_price_list = lambda db: None
-except ImportError:
-    pass
+# Import the Dorsa 1405/03/03 price list after the Flask app has initialized its schema.
+# This is deliberately asynchronous so it cannot block Railway's web startup.
+def _import_dorsa_catalog() -> None:
+    for _ in range(30):
+        try:
+            import app
+            from price_list_seed import import_price_list
+            imported, updated = import_price_list(app.db)
+            print(f"[hafez] Dorsa price-list sync complete: imported={imported}, updated={updated}")
+            try:
+                app.start_warmup(str(app.DB))
+            except Exception as exc:
+                print(f"[hafez] image warmup start warning: {exc}")
+            return
+        except Exception as exc:
+            time.sleep(1)
+    print("[hafez] Dorsa price-list sync did not complete during startup")
+
+threading.Thread(target=_import_dorsa_catalog, daemon=True, name="dorsa-catalog-import").start()
 
 # Install security hooks without requiring changes to the application's route code.
-# sitecustomize is loaded before app.py by Python when this repository is on sys.path.
 try:
     from flask import Flask
     from security import init_security
@@ -114,5 +128,4 @@ try:
         _secure_flask_init._hafez_security_wrapped = True
         Flask.__init__ = _secure_flask_init
 except ImportError:
-    # Flask is not installed in some tooling/build environments.
     pass
