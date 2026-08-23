@@ -4,11 +4,11 @@ import sqlite3
 import threading
 import uuid
 from html import unescape
-from urllib.parse import quote_plus, urljoin
+from urllib.parse import quote_plus, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 SOURCE_SEARCH = "https://citysazeh.com/?s={query}&post_type=product"
-USER_AGENT = "Mozilla/5.0 (compatible; HafezProductImageResolver/1.0)"
+USER_AGENT = "Mozilla/5.0 (compatible; HafezProductImageResolver/2.0)"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 IMAGE_DIR = os.path.join(BASE_DIR, "static", "uploads")
 os.makedirs(IMAGE_DIR, exist_ok=True)
@@ -21,13 +21,13 @@ _queue_event = threading.Event()
 PLACEHOLDER_SVG = b'<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1" viewBox="0 0 1 1"><rect width="1" height="1" fill="none"/></svg>'
 
 
-def _get(url, timeout=6):
+def _get(url, timeout=10):
     req = Request(url, headers={"User-Agent": USER_AGENT, "Accept-Language": "fa-IR,fa;q=0.9,en;q=0.6"})
     with urlopen(req, timeout=timeout) as r:
         return r.read().decode("utf-8", "ignore")
 
 
-def _download_image(url, timeout=8):
+def _download_image(url, timeout=12):
     req = Request(url, headers={"User-Agent": USER_AGENT, "Accept-Language": "fa-IR,fa;q=0.9,en;q=0.6"})
     with urlopen(req, timeout=timeout) as r:
         data = r.read(8 * 1024 * 1024 + 1)
@@ -50,25 +50,63 @@ def _download_image(url, timeout=8):
     return filename
 
 
-def _first_product_url(html):
+def _product_links(html):
     links = re.findall(r'href=["\']([^"\']+)["\']', html, flags=re.I)
+    result = []
+    seen = set()
     for link in links:
-        link = unescape(link)
-        if "/product/" in link and "citysazeh.com" in link:
-            return link.split("#", 1)[0]
-    return None
+        link = unescape(link).strip()
+        if not link:
+            continue
+        absolute = urljoin("https://citysazeh.com/", link)
+        parsed = urlparse(absolute)
+        if parsed.netloc.lower().removeprefix("www.") != "citysazeh.com":
+            continue
+        if "/product/" not in parsed.path.lower():
+            continue
+        absolute = absolute.split("#", 1)[0]
+        if absolute not in seen:
+            seen.add(absolute)
+            result.append(absolute)
+    return result
 
 
-def _og_image(html):
+def _first_product_url(html, model="", name=""):
+    links = _product_links(html)
+    model_key = re.sub(r"[^a-z0-9]+", "", (model or "").lower())
+    name_key = re.sub(r"[^\w\u0600-\u06ff]+", "", (name or "").lower())
+    if model_key:
+        exact = []
+        for link in links:
+            path_key = re.sub(r"[^a-z0-9]+", "", urlparse(link).path.lower())
+            if model_key in path_key:
+                exact.append(link)
+        if exact:
+            return exact[0]
+    if name_key:
+        for link in links:
+            path = urlparse(link).path.lower()
+            if name_key and name_key in re.sub(r"[^\w\u0600-\u06ff]+", "", path):
+                return link
+    return links[0] if links else None
+
+
+def _meta_content(html, prop):
     patterns = [
-        r'<meta[^>]+property=["\']og:image(?::secure_url)?["\'][^>]+content=["\']([^"\']+)',
-        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image(?::secure_url)?["\']',
+        rf'<meta[^>]+property=["\']{re.escape(prop)}["\'][^>]+content=["\']([^"\']+)',
+        rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']{re.escape(prop)}["\']',
+        rf'<meta[^>]+name=["\']{re.escape(prop)}["\'][^>]+content=["\']([^"\']+)',
+        rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']{re.escape(prop)}["\']',
     ]
     for pattern in patterns:
         m = re.search(pattern, html, flags=re.I)
         if m:
             return unescape(m.group(1)).strip()
     return None
+
+
+def _og_image(html):
+    return _meta_content(html, "og:image") or _meta_content(html, "og:image:secure_url")
 
 
 def resolve_product_image(product):
@@ -85,7 +123,7 @@ def resolve_product_image(product):
     for query in queries:
         try:
             search_html = _get(SOURCE_SEARCH.format(query=quote_plus(query)))
-            product_url = _first_product_url(search_html)
+            product_url = _first_product_url(search_html, model=model, name=name)
             if not product_url:
                 continue
             page_html = _get(product_url)
