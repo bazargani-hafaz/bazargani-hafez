@@ -2,9 +2,10 @@ import os, sqlite3, uuid, shutil, json, re, time
 from pathlib import Path
 from functools import wraps
 from datetime import datetime, timedelta
-from flask import Flask, render_template, request, redirect, url_for, session, flash, abort, send_file, make_response
+from flask import Flask, render_template, request, redirect, url_for, session, flash, abort, send_file, make_response, Response
 from werkzeug.utils import secure_filename
 from security import init_security
+from product_images import resolve_and_cache, start_warmup
 
 BASE=Path(__file__).resolve().parent
 DB=BASE/'instance/store.db'
@@ -62,10 +63,34 @@ def save_image(file):
     if not valid_image(file):raise ValueError('فرمت تصویر مجاز نیست.')
     name=secure_filename(file.filename);ext=name.rsplit('.',1)[-1].lower();stem=secure_filename(name.rsplit('.',1)[0]) or 'product';fn=f'{stem}_{uuid.uuid4().hex[:12]}.{ext}';file.save(UP/fn);return fn
 def safe_next(value): return value if value and value.startswith('/') and not value.startswith('//') else url_for('admin_home')
+
+def product_image_src(product):
+    image=(product['image'] or '').strip() if product else ''
+    if image.startswith('http://') or image.startswith('https://'): return image
+    if image: return '/static/uploads/'+image
+    return '/product-image/'+str(product['id']) if product and product['id'] else ''
+
 init_db();migrate()
 # Import the complete 1405/03/03 price list idempotently on startup.
 from price_list_seed import import_price_list
 import_price_list(db)
+
+@app.template_global('product_image_src')
+def _product_image_src(product):
+    return product_image_src(product)
+
+@app.route('/product-image/<int:product_id>')
+def product_image(product_id):
+    c=db();p=c.execute('SELECT id,image FROM products WHERE id=? AND active=1',(product_id,)).fetchone();c.close()
+    if not p: abort(404)
+    image=(p['image'] or '').strip()
+    if image.startswith('http://') or image.startswith('https://'):
+        return redirect(image,code=302)
+    resolved=resolve_and_cache(str(DB),product_id)
+    if resolved:
+        return redirect(resolved,code=302)
+    return Response('',status=404)
+
 @app.after_request
 def security_headers(response):
     response.headers.setdefault('X-Content-Type-Options','nosniff');response.headers.setdefault('X-Frame-Options','SAMEORIGIN');response.headers.setdefault('Referrer-Policy','strict-origin-when-cross-origin');response.headers.setdefault('Permissions-Policy','camera=(), microphone=(), geolocation=()')
@@ -116,3 +141,6 @@ def admin_home():
 # Register complete admin CRUD, analytics, security and backup routes after core app routes.
 from admin_routes import register_admin_routes
 register_admin_routes(app)
+
+# Resolve missing product photos in the background so the full catalog gets populated without delaying startup.
+start_warmup(str(DB))
