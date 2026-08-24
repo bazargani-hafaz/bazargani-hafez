@@ -128,4 +128,22 @@ register_admin_routes(app)
 from enhancements import register_enhancements
 app.config['STORE_PHONE']=os.getenv('STORE_PHONE','')
 register_enhancements(app)
+
+# Friendly, explicit admin-panel entry points. The original /admin routes remain
+# intact so existing bookmarks and internal admin links keep working.
+@app.route('/hafez-panel')
+def hafez_panel():
+    return redirect(url_for('admin_home')) if session.get('admin') is True else redirect(url_for('login', next='/hafez-panel'))
+
+@app.route('/hafez-panel/login')
+def hafez_panel_login():
+    return redirect(url_for('login', next='/hafez-panel'))
+
+@app.route('/hafez-panel/<section>')
+def hafez_panel_section(section):
+    allowed={'products':'admin_products','categories':'admin_categories','media':'admin_media','system':'admin_system','backup':'admin_backup','settings':'admin_settings'}
+    endpoint=allowed.get(section)
+    if not endpoint: abort(404)
+    return redirect(url_for(endpoint))
+
 start_warmup(str(DB))
