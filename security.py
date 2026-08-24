@@ -9,6 +9,7 @@ _LOGIN_WINDOW = 300
 _LOGIN_LIMIT = 5
 _attempts = defaultdict(deque)
 ADMIN_PREFIX = os.getenv("ADMIN_PATH", "manage-7f4c9b2d6e8a1f5c3b9d").strip("/")
+CUSTOM_ADMIN_LOGIN = "/admin/login/admin/sepehr/login"
 
 
 def _client_ip():
@@ -18,7 +19,7 @@ def _client_ip():
 
 
 class AdminPathMiddleware:
-    """Map the public private admin prefix to Flask's internal /admin routes."""
+    """Map private admin URLs to Flask's internal /admin routes."""
     def __init__(self, application):
         self.application = application
 
@@ -31,13 +32,20 @@ class AdminPathMiddleware:
     def __call__(self, environ, start_response):
         path = environ.get("PATH_INFO", "") or "/"
         secret = "/" + ADMIN_PREFIX
-        internal = path == secret or path.startswith(secret + "/")
-        if (path == "/admin" or path.startswith("/admin/")) and not environ.get("HAFEZ_PRIVATE_ADMIN"):
-            return self._deny(environ, start_response)
-        if internal:
-            suffix = path[len(secret):]
-            environ["PATH_INFO"] = "/admin" + suffix
+
+        # The custom admin login URL is intentionally the only /admin/* public
+        # entry point. Internally it is rewritten to the normal login endpoint.
+        if path == CUSTOM_ADMIN_LOGIN:
+            environ["PATH_INFO"] = "/admin/login"
             environ["HAFEZ_PRIVATE_ADMIN"] = "1"
+        else:
+            internal = path == secret or path.startswith(secret + "/")
+            if (path == "/admin" or path.startswith("/admin/")) and not environ.get("HAFEZ_PRIVATE_ADMIN"):
+                return self._deny(environ, start_response)
+            if internal:
+                suffix = path[len(secret):]
+                environ["PATH_INFO"] = "/admin" + suffix
+                environ["HAFEZ_PRIVATE_ADMIN"] = "1"
 
         captured = {}
         def capture(status, headers, exc_info=None):
@@ -51,7 +59,8 @@ class AdminPathMiddleware:
             body = body.replace(b"/admin", secret.encode("utf-8"))
         new_headers = []
         for name, value in headers:
-            if name.lower() == "location": value = value.replace("/admin/", secret + "/").replace("/admin", secret)
+            if name.lower() == "location":
+                value = value.replace("/admin/", secret + "/").replace("/admin", secret)
             if name.lower() == "content-length": value = str(len(body))
             new_headers.append((name, value))
         start_response(captured.get("status", "500 Internal Server Error"), new_headers, captured.get("exc_info"))
@@ -86,10 +95,6 @@ def init_security(app):
     @app.after_request
     def hardened_security_headers(response):
         response.headers["X-Content-Type-Options"]="nosniff"; response.headers["X-Frame-Options"]="SAMEORIGIN"; response.headers["Referrer-Policy"]="strict-origin-when-cross-origin"; response.headers["Permissions-Policy"]="camera=(), microphone=(), geolocation=(), payment=()"; response.headers["Cross-Origin-Opener-Policy"]="same-origin"; response.headers["Cross-Origin-Resource-Policy"]="same-origin"; response.headers["X-Permitted-Cross-Domain-Policies"]="none"; response.headers["X-DNS-Prefetch-Control"]="off"
-        # The admin UI currently contains small inline event handlers and inline
-        # scripts. Keep the rest of the CSP strict while allowing those handlers;
-        # all state-changing admin requests are still protected by same-origin
-        # checks, secure HttpOnly cookies, private admin routing and rate limits.
         response.headers["Content-Security-Policy"]="default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; frame-src https://www.openstreetmap.org; connect-src 'self'; upgrade-insecure-requests"
         response.headers["Cache-Control"]="no-store, max-age=0" if request.path.startswith("/admin") else response.headers.get("Cache-Control", "public, max-age=0, must-revalidate")
         if request.is_secure: response.headers["Strict-Transport-Security"]="max-age=31536000; includeSubDomains"
