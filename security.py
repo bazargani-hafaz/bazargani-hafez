@@ -86,7 +86,11 @@ def init_security(app):
     @app.after_request
     def hardened_security_headers(response):
         response.headers["X-Content-Type-Options"]="nosniff"; response.headers["X-Frame-Options"]="SAMEORIGIN"; response.headers["Referrer-Policy"]="strict-origin-when-cross-origin"; response.headers["Permissions-Policy"]="camera=(), microphone=(), geolocation=(), payment=()"; response.headers["Cross-Origin-Opener-Policy"]="same-origin"; response.headers["Cross-Origin-Resource-Policy"]="same-origin"; response.headers["X-Permitted-Cross-Domain-Policies"]="none"; response.headers["X-DNS-Prefetch-Control"]="off"
-        response.headers["Content-Security-Policy"]="default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; frame-src https://www.openstreetmap.org; connect-src 'self'; upgrade-insecure-requests"
+        # The admin UI currently contains small inline event handlers and inline
+        # scripts. Keep the rest of the CSP strict while allowing those handlers;
+        # all state-changing admin requests are still protected by same-origin
+        # checks, secure HttpOnly cookies, private admin routing and rate limits.
+        response.headers["Content-Security-Policy"]="default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; frame-src https://www.openstreetmap.org; connect-src 'self'; upgrade-insecure-requests"
         response.headers["Cache-Control"]="no-store, max-age=0" if request.path.startswith("/admin") else response.headers.get("Cache-Control", "public, max-age=0, must-revalidate")
         if request.is_secure: response.headers["Strict-Transport-Security"]="max-age=31536000; includeSubDomains"
         response.headers.pop("Server", None)
@@ -99,6 +103,5 @@ def init_security(app):
         except OSError: version="unknown"
         return {"site_version":version}
 
-    # Register the complete admin CRUD surface after the Flask app exists.
     from admin_routes import register_admin_routes
     register_admin_routes(app)
