@@ -14,8 +14,6 @@ UP.mkdir(parents=True,exist_ok=True)
 DB.parent.mkdir(parents=True,exist_ok=True)
 SECRET_KEY=os.getenv('SECRET_KEY') or uuid.uuid4().hex+uuid.uuid4().hex
 app=Flask(__name__)
-# Railway terminates HTTPS at its proxy. Trust the forwarded scheme/host so
-# secure admin cookies and same-origin protection work correctly in production.
 app.wsgi_app=ProxyFix(app.wsgi_app,x_for=1,x_proto=1,x_host=1)
 app.secret_key=SECRET_KEY
 app.config.update(MAX_CONTENT_LENGTH=10*1024*1024,SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE='Lax',SESSION_COOKIE_SECURE=os.getenv('COOKIE_SECURE','1').lower() in ('1','true','yes'),PERMANENT_SESSION_LIFETIME=timedelta(hours=8))
@@ -74,8 +72,7 @@ def product_image(product_id):
     c=db();p=c.execute('SELECT id,image FROM products WHERE id=? AND active=1',(product_id,)).fetchone();c.close()
     if not p: abort(404)
     image=(p['image'] or '').strip()
-    if image.startswith('http://') or image.startswith('https://'):
-        return redirect(image,code=302)
+    if image.startswith('http://') or image.startswith('https://'): return redirect(image,code=302)
     if image:
         local=UP/os.path.basename(image)
         if local.is_file():
@@ -122,6 +119,24 @@ def login():
             clear_login_failures(key);session.clear();session.permanent=True;session['admin']=True;return redirect(safe_next(request.args.get('next')))
         record_login_failure(key);flash('نام کاربری یا رمز عبور اشتباه است.','error')
     return render_template('login.html')
+
+# Private-looking admin entry URL. It shows the same secure admin login form,
+# but after successful authentication it opens the admin dashboard.
+@app.route('/admin/login/admin/sepehr/login',methods=['GET','POST'])
+def sepehr_admin_login():
+    if session.get('admin') is True:
+        return redirect(url_for('admin_home'))
+    if request.method=='POST':
+        key=client_key()
+        if rate_limited(key):
+            flash('تعداد تلاش‌های ورود زیاد است. چند دقیقه بعد دوباره تلاش کنید.','error')
+            return render_template('login.html'),429
+        username=os.getenv('ADMIN_USERNAME');password=os.getenv('ADMIN_PASSWORD')
+        if username and password and request.form.get('username')==username and request.form.get('password')==password:
+            clear_login_failures(key);session.clear();session.permanent=True;session['admin']=True
+            return redirect(url_for('admin_home'))
+        record_login_failure(key);flash('نام کاربری یا رمز عبور اشتباه است.','error')
+    return render_template('login.html')
 @app.route('/admin/logout')
 def logout():session.clear();return redirect(url_for('home'))
 @app.route('/admin')
@@ -134,8 +149,6 @@ from enhancements import register_enhancements
 app.config['STORE_PHONE']=os.getenv('STORE_PHONE','')
 register_enhancements(app)
 
-# Friendly, explicit admin-panel entry points. The original /admin routes remain
-# intact so existing bookmarks and internal admin links keep working.
 @app.route('/hafez-panel')
 def hafez_panel():
     return redirect(url_for('admin_home')) if session.get('admin') is True else redirect(url_for('login', next='/hafez-panel'))
