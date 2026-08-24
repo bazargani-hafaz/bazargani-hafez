@@ -125,4 +125,7 @@ def admin_home():
     c=db();counts={k:c.execute(q).fetchone()['n'] for k,q in {'products':'SELECT COUNT(*) n FROM products','categories':'SELECT COUNT(*) n FROM categories','featured':'SELECT COUNT(*) n FROM products WHERE featured=1'}.items()};c.close();return render_template('admin.html',counts=counts)
 from admin_routes import register_admin_routes
 register_admin_routes(app)
+from enhancements import register_enhancements
+app.config['STORE_PHONE']=os.getenv('STORE_PHONE','')
+register_enhancements(app)
 start_warmup(str(DB))
