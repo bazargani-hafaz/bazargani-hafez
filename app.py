@@ -4,6 +4,7 @@ from functools import wraps
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, redirect, url_for, session, flash, abort, send_file, make_response, Response
 from werkzeug.utils import secure_filename
+from werkzeug.middleware.proxy_fix import ProxyFix
 from security import init_security
 from product_images import request_resolve_async, start_warmup
 BASE=Path(__file__).resolve().parent
@@ -12,7 +13,11 @@ UP=BASE/'static/uploads'
 UP.mkdir(parents=True,exist_ok=True)
 DB.parent.mkdir(parents=True,exist_ok=True)
 SECRET_KEY=os.getenv('SECRET_KEY') or uuid.uuid4().hex+uuid.uuid4().hex
-app=Flask(__name__); app.secret_key=SECRET_KEY
+app=Flask(__name__)
+# Railway terminates HTTPS at its proxy. Trust the forwarded scheme/host so
+# secure admin cookies and same-origin protection work correctly in production.
+app.wsgi_app=ProxyFix(app.wsgi_app,x_for=1,x_proto=1,x_host=1)
+app.secret_key=SECRET_KEY
 app.config.update(MAX_CONTENT_LENGTH=10*1024*1024,SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE='Lax',SESSION_COOKIE_SECURE=os.getenv('COOKIE_SECURE','1').lower() in ('1','true','yes'),PERMANENT_SESSION_LIFETIME=timedelta(hours=8))
 init_security(app)
 ALLOWED_IMAGE_EXT={'jpg','jpeg','png','webp'}; ALLOWED_IMAGE_TYPES={'jpg':b'\xff\xd8\xff','jpeg':b'\xff\xd8\xff','png':b'\x89PNG\r\n\x1a\n','webp':b'RIFF'}
